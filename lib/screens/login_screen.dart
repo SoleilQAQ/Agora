@@ -219,6 +219,7 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+
   Widget _buildHeader(ColorScheme colorScheme) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -230,15 +231,19 @@ class _LoginScreenState extends State<LoginScreen>
             width: 72,
             height: 72,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+             /* gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [colorScheme.primary, colorScheme.tertiary],
-              ),
+                colors: [
+                  colorScheme.primaryContainer,
+                  colorScheme.tertiaryContainer,
+                ],
+              ),*/
+              color: Color.alphaBlend(colorScheme.primary.withValues(alpha: 0.18), colorScheme.surfaceContainerHigh),
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: colorScheme.primary.withValues(alpha: 0.25),
+                  color: colorScheme.primary.withValues(alpha: 0.22),
                   blurRadius: 16,
                   spreadRadius: 1,
                   offset: const Offset(0, 4),
