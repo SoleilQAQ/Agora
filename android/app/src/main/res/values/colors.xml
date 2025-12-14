@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#435E91</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
     
     <!-- 小组件颜色 - 亮色模式 (Android 12 以下回退) -->
     <color name="widget_background_color">#FFFBFE</color>
