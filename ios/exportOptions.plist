@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>method</key>
+    <string>development</string> <!-- 不需要正式的 Apple 证书，用 development 测试 -->
+    <key>teamID</key>
+    <string></string> <!-- 这里可以留空，或者用免费账户的 Team ID -->
+    <key>compileBitcode</key>
+    <true/>
+    <key>signingStyle</key>
+    <string>manual</string> <!-- 使用手动签名 -->
+    <key>signingCertificate</key>
+    <string>iOS Development</string>
+    <key>signingIdentity</key>
+    <string>iPhone Developer</string>
+    <key>destination</key>
+    <string>export</string>
+  </dict>
+</plist>
