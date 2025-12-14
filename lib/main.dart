@@ -53,7 +53,7 @@ class AgoraApp extends StatefulWidget {
 class _AgoraAppState extends State<AgoraApp> {
   // 默认种子色 - 当系统不支持动态取色时使用
   // TODO 修改
-  static const Color _defaultSeedColor = Color(0xFF6366F1);
+  static const Color _defaultSeedColor = Color(0xFF1A73E8);
 
   final ThemeService _themeService = ThemeService();
 

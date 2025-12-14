@@ -22,6 +22,10 @@ val ciKeystorePassword: String? = System.getenv("KEYSTORE_PASSWORD")
 val ciKeyAlias: String? = System.getenv("KEY_ALIAS")
 val ciKeyPassword: String? = System.getenv("KEY_PASSWORD")
 
+// 是否存在 CI 签名配置（用于避免 release 构建因缺失签名参数而直接失败）
+val hasCiSigning = !ciKeystoreFile.isNullOrEmpty() && !ciKeystorePassword.isNullOrEmpty() && !ciKeyAlias.isNullOrEmpty() && !ciKeyPassword.isNullOrEmpty()
+val hasSigning = hasCiSigning || hasLocalKeystore
+
 android {
     namespace = "com.soleil.agora"
     compileSdk = 36
@@ -64,7 +68,13 @@ android {
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            if (hasSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // 不阻断构建：本地/PR 场景可构建未签名或改用 debug 签名；正式发布请配置签名。
+                println("⚠️ Release signing config is missing. " +
+                        "Provide CI env vars or android/key.properties for a properly signed release.")
+            }
             isMinifyEnabled = false
             isShrinkResources = false
         }
