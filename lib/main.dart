@@ -318,7 +318,8 @@ class _AppNavigatorState extends State<AppNavigator>
   @override
   void initState() {
     super.initState();
-    const nativeBaseUrl = 'https://ysjw.sdufe.edu.cn:8081';
+    // const nativeBaseUrl = 'http://10.0.2.2:8000'; emu ip
+    const nativeBaseUrl = 'http://47.122.112.62:8000';
     const proxyBaseUrl  = 'https://api.byteflow.asia';
     _jwxtService = JwxtService(
       baseUrl: kIsWeb ? proxyBaseUrl : nativeBaseUrl);

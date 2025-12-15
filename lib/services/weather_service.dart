@@ -322,7 +322,8 @@ class WeatherService {
 
     try {
       final response = await dio.get(
-        '/api/weather',
+        '/api/weather/current',
+        // '/api/weather',
         queryParameters: {'city': cityPinyin},
       );
 

@@ -138,9 +138,28 @@ class SemesterGrades {
     return totalCredits > 0 ? totalPoints / totalCredits : null;
   }
 
+  /// 学期平均成绩（加权平均）
   double? get averageScore {
-    // TODO: 计算平均成绩
-    return 0;
+    final gradesWithScore = grades.where((g) {
+      // 只计算有数字成绩的课程
+      final numScore = double.tryParse(g.score);
+      return numScore != null;
+    }).toList();
+
+    if (gradesWithScore.isEmpty) return null;
+
+    var totalScore = 0.0;
+    var totalCredits = 0.0;
+
+    for (final grade in gradesWithScore) {
+      final numScore = double.tryParse(grade.score);
+      if (numScore != null) {
+        totalScore += numScore * grade.credit;
+        totalCredits += grade.credit;
+      }
+    }
+
+    return totalCredits > 0 ? totalScore / totalCredits : null;
   }
 
   /// 从 JSON 创建

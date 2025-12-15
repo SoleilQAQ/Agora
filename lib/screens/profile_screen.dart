@@ -328,8 +328,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                       theme,
                       colorScheme,
                       '平均成绩',
-                      // TODO 修改成绩 未完成平均成绩代码
-                      '--',
+                      widget.dataManager.calculateOverallAverageScore()
+                              ?.toStringAsFixed(1) ??
+                          '--',
                     ),
                   ),
                   Container(

@@ -24,6 +24,51 @@ class _GradesScreenState extends State<GradesScreen>
   @override
   bool get wantKeepAlive => false; // 禁用以减少内存占用
 
+  /// 计算所有学期的总平均成绩（加权平均）
+  double? _calculateOverallAverageScore(List<SemesterGrades> allGrades) {
+    var totalScore = 0.0;
+    var totalCredits = 0.0;
+
+    for (final semesterGrades in allGrades) {
+      for (final grade in semesterGrades.grades) {
+        final numScore = double.tryParse(grade.score);
+        if (numScore != null) {
+          totalScore += numScore * grade.credit;
+          totalCredits += grade.credit;
+        }
+      }
+    }
+
+    return totalCredits > 0 ? totalScore / totalCredits : null;
+  }
+
+  /// 计算所有学期的总平均绩点（加权平均）
+  double? _calculateOverallAverageGpa(List<SemesterGrades> allGrades) {
+    var totalPoints = 0.0;
+    var totalCredits = 0.0;
+
+    for (final semesterGrades in allGrades) {
+      for (final grade in semesterGrades.grades) {
+        if (grade.gpa != null) {
+          totalPoints += grade.gpa! * grade.credit;
+          totalCredits += grade.credit;
+        }
+      }
+    }
+
+    return totalCredits > 0 ? totalPoints / totalCredits : null;
+  }
+
+  /// 计算所有学期的总学分
+  double _calculateTotalCredits(List<SemesterGrades> allGrades) {
+    return allGrades.fold(0.0, (sum, sg) => sum + sg.totalCredits);
+  }
+
+  /// 计算所有学期的已获学分
+  double _calculateEarnedCredits(List<SemesterGrades> allGrades) {
+    return allGrades.fold(0.0, (sum, sg) => sum + sg.earnedCredits);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -102,11 +147,15 @@ class _GradesScreenState extends State<GradesScreen>
 
                       // 数据内容
                       if (grades != null && grades.isNotEmpty) ...[
+                        // 总成绩汇总卡片
+                        _buildOverallStatisticsCard(theme, colorScheme, grades),
+                        const SizedBox(height: 16),
+
                         // 学期选择器
                         _buildSemesterSelector(theme, colorScheme, grades),
                         const SizedBox(height: 20),
 
-                        // 统计卡片
+                        // 当前学期统计卡片
                         if (currentGrades != null)
                           _buildStatisticsCard(
                             theme,
@@ -338,12 +387,134 @@ class _GradesScreenState extends State<GradesScreen>
     );
   }
 
+  /// 构建所有学期总成绩汇总卡片
+  Widget _buildOverallStatisticsCard(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    List<SemesterGrades> allGrades,
+  ) {
+    final overallAvgScore = _calculateOverallAverageScore(allGrades);
+    final overallAvgGpa = _calculateOverallAverageGpa(allGrades);
+    final totalCredits = _calculateTotalCredits(allGrades);
+    final earnedCredits = _calculateEarnedCredits(allGrades);
+
+    return Card(
+      elevation: 0,
+      color: colorScheme.tertiaryContainer.withValues(alpha: 0.3),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 标题
+            Row(
+              children: [
+                Icon(
+                  Icons.analytics_outlined,
+                  color: colorScheme.tertiary,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '总成绩汇总',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colorScheme.tertiary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '${allGrades.length}学期',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.tertiary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 统计数据
+            Row(
+              children: [
+                _buildOverallStatItem(
+                  theme,
+                  colorScheme,
+                  '总平均分',
+                  overallAvgScore?.toStringAsFixed(1) ?? '--',
+                ),
+                _buildOverallStatItem(
+                  theme,
+                  colorScheme,
+                  '总绩点',
+                  overallAvgGpa?.toStringAsFixed(2) ?? '--',
+                ),
+                _buildOverallStatItem(
+                  theme,
+                  colorScheme,
+                  '总学分',
+                  totalCredits.toStringAsFixed(1),
+                ),
+                _buildOverallStatItem(
+                  theme,
+                  colorScheme,
+                  '已获学分',
+                  earnedCredits.toStringAsFixed(1),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建总成绩统计项
+  Widget _buildOverallStatItem(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    String label,
+    String value,
+  ) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: colorScheme.tertiary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatisticsCard(
     ThemeData theme,
     ColorScheme colorScheme,
     SemesterGrades grades,
   ) {
     final avgGpa = grades.averageGpa;
+    final avgScore = grades.averageScore; // 加权平均成绩
     final totalCredits = grades.totalCredits;
     final earnedCredits = grades.earnedCredits;
     final passRate = grades.grades.isEmpty
@@ -413,9 +584,16 @@ class _GradesScreenState extends State<GradesScreen>
               ],
             ),
             const SizedBox(height: 20),
-            // 统计数据行
+            // 统计数据行（第一行）
             Row(
               children: [
+                _buildStatItem(
+                  theme,
+                  colorScheme,
+                  Icons.grade_outlined,
+                  '平均分',
+                  avgScore?.toStringAsFixed(1) ?? '--',
+                ),
                 _buildStatItem(
                   theme,
                   colorScheme,
@@ -430,6 +608,12 @@ class _GradesScreenState extends State<GradesScreen>
                   '已获学分',
                   earnedCredits.toStringAsFixed(1),
                 ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // 统计数据行（第二行）
+            Row(
+              children: [
                 _buildStatItem(
                   theme,
                   colorScheme,
@@ -437,6 +621,8 @@ class _GradesScreenState extends State<GradesScreen>
                   '通过率',
                   '${(passRate * 100).toInt()}%',
                 ),
+                const Expanded(child: SizedBox()), // 占位
+                const Expanded(child: SizedBox()), // 占位
               ],
             ),
           ],

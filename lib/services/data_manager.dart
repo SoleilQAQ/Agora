@@ -262,8 +262,12 @@ class DataManager extends ChangeNotifier {
         _schedule = schedule;
         _scheduleState = LoadingState.loaded;
 
-        // 获取当前周次
-        _currentWeek = await jwxtService.fetchCurrentWeek();
+        // 优先使用后端返回的当前周次，如果后端没有返回（默认为1）则使用本地计算
+        if (schedule.currentWeek > 1) {
+          _currentWeek = schedule.currentWeek;
+        } else {
+          _currentWeek = await AuthStorage.calculateCurrentWeek();
+        }
 
         // 保存到缓存（仅当是当前学期时）
         if (xnxq == null) {
@@ -507,6 +511,26 @@ class DataManager extends ChangeNotifier {
       total += semester.earnedCredits;
     }
     return total;
+  }
+
+  /// 计算总平均成绩（加权平均）
+  double? calculateOverallAverageScore() {
+    if (_grades == null || _grades!.isEmpty) return null;
+
+    var totalScore = 0.0;
+    var totalCredits = 0.0;
+
+    for (final semester in _grades!) {
+      for (final grade in semester.grades) {
+        final numScore = double.tryParse(grade.score);
+        if (numScore != null) {
+          totalScore += numScore * grade.credit;
+          totalCredits += grade.credit;
+        }
+      }
+    }
+
+    return totalCredits > 0 ? totalScore / totalCredits : null;
   }
 
   /// 清除所有缓存数据
