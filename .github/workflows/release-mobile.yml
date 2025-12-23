@@ -3,10 +3,25 @@ name: Release Mobile (Android + iOS)
 on:
   push:
     branches: [master]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Also publish GitHub Release"
+        required: true
+        type: boolean
+        default: false
+      tag:
+        description: "Tag name to publish (e.g., v1.2.3). Required if publish_release=true on manual run."
+        required: false
+        type: string
+      create_tag:
+        description: "Create & push the tag from current commit (manual run only)"
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -21,7 +36,7 @@ jobs:
 
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }}
+      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }} # legacy compatible
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -40,35 +55,53 @@ jobs:
           channel: stable
           cache: true
 
-      - run: flutter pub get
+      - name: Pub get
+        run: flutter pub get
 
-      - name: Prepare signing (push/tag only)
+      # 关键点：你的 build.gradle.kts 如果是读 android/key.properties，
+      # 那就必须在 CI 里生成 key.properties（而不仅仅是 export env）
+      - name: Prepare Android signing (push/tag only)
         if: github.event_name != 'pull_request'
         working-directory: android/app
         shell: bash
         run: |
           set -euo pipefail
+
           B64="${KEYSTORE_BASE64:-}"
           if [ -z "$B64" ]; then B64="${KEYSTORE_FILE_B64:-}"; fi
           if [ -z "$B64" ]; then
-            echo "::error::Missing signing keystore secret. Set KEYSTORE_BASE64 or legacy KEYSTORE_FILE (base64)."
+            echo "::error::Missing signing keystore secret. Set KEYSTORE_BASE64 (or legacy KEYSTORE_FILE) as base64."
             exit 1
           fi
+
           if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
             echo "::error::Missing signing secrets. Need KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD."
             exit 1
           fi
+
+          # decode keystore to android/app/keystore.jks
           echo "$B64" | base64 --decode > keystore.jks
-          echo "KEYSTORE_FILE=keystore.jks" >> $GITHUB_ENV
-          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
-          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+
+          # write android/key.properties (rootProject.file("key.properties") 常见位置)
+          cat > ../key.properties <<EOF
+          storeFile=keystore.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+
+          echo "Generated android/key.properties"
+          ls -al .
+          sed -e 's/storePassword=.*/storePassword=***masked***/' \
+              -e 's/keyPassword=.*/keyPassword=***masked***/' \
+              -e 's/keyAlias=.*/keyAlias=***masked***/' \
+              ../key.properties || true
 
       - name: Build APK (debug for PR)
         if: github.event_name == 'pull_request'
         run: flutter build apk --debug
 
-      - name: Build APK (signed release for push/tag)
+      - name: Build APK (release for push/tag)
         if: github.event_name != 'pull_request'
         run: flutter build apk --release
 
@@ -78,8 +111,7 @@ jobs:
           name: android-apk
           if-no-files-found: error
           path: |
-            build/app/outputs/flutter-apk/app-debug.apk
-            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/*.apk
 
   ios:
     name: Build iOS IPA (unsigned)
@@ -96,7 +128,17 @@ jobs:
           channel: stable
           cache: true
 
-      - run: flutter pub get
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Install CocoaPods (if needed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v pod >/dev/null 2>&1; then
+            sudo gem install cocoapods
+          fi
+          pod --version
 
       - name: Install pods
         working-directory: ios
@@ -106,11 +148,13 @@ jobs:
         run: flutter build ios --release --no-codesign
 
       - name: Create unsigned .ipa from Runner.app
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p build/ios/ipa/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
-          cd build/ios/ipa
-          zip -r Agora-unsigned.ipa Payload
+          (cd build/ios/ipa && zip -r Agora-unsigned.ipa Payload)
+          ls -al build/ios/ipa
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
@@ -123,13 +167,48 @@ jobs:
     name: Publish GitHub Release (single)
     needs: [android, ios]
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
 
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 关键点：tag push v* 才自动发；手动 workflow_dispatch 勾选 publish_release 也可发
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+            if [[ -z "$TAG" ]]; then
+              echo "::error::inputs.tag is required when publish_release=true (e.g., v1.2.3)."
+              exit 1
+            fi
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using tag: $TAG"
+
+      - name: Create & push tag (manual run only)
+        if: github.event_name == 'workflow_dispatch' && inputs.create_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.vars.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 如果已存在则不报错
+          git tag -a "$TAG" -m "$TAG" || true
+          git push origin "$TAG"
+
       - name: Download Android artifact
         uses: actions/download-artifact@v4
         with:
@@ -146,16 +225,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f dist/android/app-release.apk ]; then
-            cp dist/android/app-release.apk dist/Agora-android-${{ github.ref_name }}.apk
+          TAG="${{ steps.vars.outputs.tag }}"
+          mkdir -p dist/out
+
+          # android: 优先找 release apk
+          APK="$(ls -1 dist/android/*release*.apk 2>/dev/null | head -n 1 || true)"
+          if [ -z "$APK" ]; then
+            APK="$(ls -1 dist/android/*.apk 2>/dev/null | head -n 1 || true)"
           fi
-          cp dist/ios/Agora-unsigned.ipa dist/Agora-ios-unsigned-${{ github.ref_name }}.ipa
-          ls -al dist
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found in dist/android"
+            exit 1
+          fi
+          cp "$APK" "dist/out/Agora-android-${TAG}.apk"
+
+          # ios
+          if [ ! -f dist/ios/Agora-unsigned.ipa ]; then
+            echo "::error::Missing dist/ios/Agora-unsigned.ipa"
+            exit 1
+          fi
+          cp dist/ios/Agora-unsigned.ipa "dist/out/Agora-ios-unsigned-${TAG}.ipa"
+
+          ls -al dist/out
 
       - name: Create/Update Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            dist/Agora-android-${{ github.ref_name }}.apk
-            dist/Agora-ios-unsigned-${{ github.ref_name }}.ipa
+            dist/out/Agora-android-${{ steps.vars.outputs.tag }}.apk
+            dist/out/Agora-ios-unsigned-${{ steps.vars.outputs.tag }}.ipa
