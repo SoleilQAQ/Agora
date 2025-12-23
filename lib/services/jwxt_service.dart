@@ -497,7 +497,7 @@ class JwxtService {
       college: json['college'] as String?,
       major: json['major'] as String?,
       className: json['className'] as String?,
-      enrollmentYear: json['grade'] as String?, // grade 映射到 enrollmentYear
+      enrollmentYear: json['enrollmentYear'] as String?,
       studyLevel: json['studyLevel'] as String?,
     );
   }

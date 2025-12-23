@@ -42,6 +42,11 @@ class AuthStorage {
   static const String _keyWeatherCityPinyin = 'weather_city_pinyin';
   static const String _keyWeatherCityName = 'weather_city_name';
 
+  // 定位相关 keys
+  static const String _keyWeatherUseAutoLocation = 'weather_use_auto_location';
+  static const String _keyWeatherLastLocatedPinyin = 'weather_last_located_pinyin';
+  static const String _keyWeatherLastLocatedName = 'weather_last_located_name';
+
   // 缓存时间配置（分钟）
   static const int weatherCacheMinutes = 30; // 天气缓存30分钟
   static const int scheduleCacheMinutes = 480; // 课程表缓存8小时（480分钟）
@@ -413,6 +418,48 @@ class AuthStorage {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyWeatherCityPinyin);
     await prefs.remove(_keyWeatherCityName);
+  }
+
+  // ==================== 定位模式偏好 ====================
+
+  /// 保存定位模式偏好
+  /// [useAutoLocation] true 表示使用自动定位，false 表示手动选择
+  static Future<void> saveLocationMode(bool useAutoLocation) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyWeatherUseAutoLocation, useAutoLocation);
+  }
+
+  /// 获取定位模式偏好
+  /// 返回 true 表示使用自动定位，false 表示手动选择
+  /// 默认返回 false（手动选择）
+  static Future<bool> getLocationMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyWeatherUseAutoLocation) ?? false;
+  }
+
+  /// 保存最后一次成功定位的城市（用于回退）
+  /// [pinyin] 城市拼音（用于 API 请求）
+  /// [name] 城市显示名称
+  static Future<void> saveLastLocatedCity(String pinyin, String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyWeatherLastLocatedPinyin, pinyin);
+    await prefs.setString(_keyWeatherLastLocatedName, name);
+  }
+
+  /// 获取最后一次成功定位的城市
+  /// 返回 (城市拼音, 城市名称)，如果没有保存则返回 (null, null)
+  static Future<(String?, String?)> getLastLocatedCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pinyin = prefs.getString(_keyWeatherLastLocatedPinyin);
+    final name = prefs.getString(_keyWeatherLastLocatedName);
+    return (pinyin, name);
+  }
+
+  /// 清除最后定位城市记录
+  static Future<void> clearLastLocatedCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyWeatherLastLocatedPinyin);
+    await prefs.remove(_keyWeatherLastLocatedName);
   }
 
   // ==================== 课程表缓存 ====================

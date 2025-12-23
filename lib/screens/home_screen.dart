@@ -63,6 +63,11 @@ class _HomeScreenState extends State<HomeScreen>
   bool _hasCity = false; // 是否已设置城市
   String? _cityName; // 当前城市名称
 
+  // 定位相关状态
+  bool _isLocating = false; // 是否正在定位
+  LocationError? _locationError; // 定位错误
+  String? _locationErrorMessage; // 定位错误信息
+
   // 时间表 - 与课程表页面同步
   Map<int, (String, String)> _sectionTimes = {};
 
@@ -374,6 +379,87 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
     }
+  }
+
+  /// 通过自动定位获取天气
+  /// Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.4
+  Future<void> _getWeatherByLocation() async {
+    // 检查 API 调用限制
+    final (canCall, waitSeconds) = await AuthStorage.canCallWeatherApi();
+    if (!canCall) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('操作太频繁，请 $waitSeconds 秒后再试'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
+    // 设置定位中状态
+    setState(() {
+      _isLocating = true;
+      _locationError = null;
+      _locationErrorMessage = null;
+    });
+
+    try {
+      // 记录 API 调用
+      await AuthStorage.recordWeatherApiCall();
+
+      // 调用天气服务的定位方法
+      final result = await weatherService.getWeatherByLocation();
+
+      if (!mounted) return;
+
+      if (result.success && result.weather != null) {
+        // 定位成功，更新状态
+        final cityName = await AuthStorage.getWeatherCityName();
+        setState(() {
+          _hasCity = true;
+          _cityName = cityName;
+          _weather = result.weather;
+          _isLocating = false;
+          _isLoadingWeather = false;
+          _locationError = null;
+          _locationErrorMessage = null;
+        });
+      } else {
+        // 定位失败，设置错误状态
+        setState(() {
+          _isLocating = false;
+          _locationError = result.locationError;
+          _locationErrorMessage = result.errorMessage;
+        });
+      }
+    } catch (e) {
+      debugPrint('自动定位失败: $e');
+      if (mounted) {
+        setState(() {
+          _isLocating = false;
+          _locationError = LocationError.unknown;
+          _locationErrorMessage = '定位失败: $e';
+        });
+      }
+    }
+  }
+
+  /// 打开应用设置（用于用户手动开启权限）
+  /// Requirements: 4.4
+  Future<void> _openAppSettings() async {
+    final locationService = weatherService.locationService;
+    await locationService.openAppSettings();
+  }
+
+  /// 清除定位错误状态
+  void _clearLocationError() {
+    setState(() {
+      _locationError = null;
+      _locationErrorMessage = null;
+    });
   }
 
   /// 加载时间表（与课程表页面同步）
@@ -1079,58 +1165,121 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildWeatherCard(ThemeData theme, ColorScheme colorScheme) {
-    // 未设置城市状态
+    // 正在定位状态 (Requirements: 2.4)
+    if (_isLocating) {
+      return Card(
+        elevation: 0,
+        color: colorScheme.primaryContainer.withValues(alpha: 0.3),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '正在定位...',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 定位错误状态 (Requirements: 3.1, 3.2, 3.4)
+    if (_locationError != null && !_hasCity) {
+      return _buildLocationErrorCard(theme, colorScheme);
+    }
+
+    // 未设置城市状态 - 显示自动定位和手动选择选项 (Requirements: 1.1)
     if (!_hasCity) {
       return Card(
         elevation: 0,
         color: colorScheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => _showCitySelector(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.wb_sunny_rounded,
+                      size: 24,
+                      color: colorScheme.primary,
+                    ),
                   ),
-                  child: Icon(
-                    Icons.location_city_rounded,
-                    size: 24,
-                    color: colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '设置天气城市',
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '设置天气城市',
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      Text(
-                        '点击选择您所在的城市',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
+                        Text(
+                          '选择获取天气的方式',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  size: 16,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ],
-            ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // 按钮行：自动定位 + 手动选择
+              Row(
+                children: [
+                  // 自动定位按钮
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _getWeatherByLocation,
+                      icon: const Icon(Icons.my_location_rounded, size: 18),
+                      label: const Text('自动定位'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // 手动选择按钮
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _showCitySelector,
+                      icon: const Icon(Icons.location_city_rounded, size: 18),
+                      label: const Text('手动选择'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       );
@@ -1288,28 +1437,242 @@ class _HomeScreenState extends State<HomeScreen>
                     ],
                   ),
                 ),
-                // 右侧信息
+                // 右侧信息和定位刷新按钮 (Requirements: 2.1, 2.2)
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
+                    // 定位刷新按钮
+                    GestureDetector(
+                      onTap: _getWeatherByLocation,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.my_location_rounded,
+                          size: 16,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
                     Text(
                       '体感${weather.feelsLike.round()}°',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: Colors.white.withValues(alpha: 0.9),
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      size: 18,
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
                   ],
                 ),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 构建定位错误卡片 (Requirements: 3.1, 3.2, 3.4)
+  Widget _buildLocationErrorCard(ThemeData theme, ColorScheme colorScheme) {
+    // 根据错误类型显示不同的提示
+    String title;
+    String subtitle;
+    IconData icon;
+    List<Widget> actions;
+
+    switch (_locationError) {
+      case LocationError.permissionDenied:
+        // 权限被拒绝（可再次请求）
+        title = '需要位置权限';
+        subtitle = '请允许访问位置以获取当前城市天气';
+        icon = Icons.location_off_rounded;
+        actions = [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: _getWeatherByLocation,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('重新授权'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _clearLocationError();
+                _showCitySelector();
+              },
+              icon: const Icon(Icons.location_city_rounded, size: 18),
+              label: const Text('手动选择'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ];
+        break;
+
+      case LocationError.permissionDeniedForever:
+        // 权限被永久拒绝（需要去设置开启）
+        title = '位置权限已关闭';
+        subtitle = '请在系统设置中开启位置权限';
+        icon = Icons.settings_rounded;
+        actions = [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: _openAppSettings,
+              icon: const Icon(Icons.settings_rounded, size: 18),
+              label: const Text('打开设置'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _clearLocationError();
+                _showCitySelector();
+              },
+              icon: const Icon(Icons.location_city_rounded, size: 18),
+              label: const Text('手动选择'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ];
+        break;
+
+      case LocationError.serviceDisabled:
+        // 定位服务未开启
+        title = '定位服务未开启';
+        subtitle = '请在系统设置中开启定位服务';
+        icon = Icons.location_disabled_rounded;
+        actions = [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: () async {
+                final locationService = weatherService.locationService;
+                await locationService.openLocationSettings();
+              },
+              icon: const Icon(Icons.settings_rounded, size: 18),
+              label: const Text('打开设置'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _clearLocationError();
+                _showCitySelector();
+              },
+              icon: const Icon(Icons.location_city_rounded, size: 18),
+              label: const Text('手动选择'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ];
+        break;
+
+      case LocationError.timeout:
+      case LocationError.geocodeFailed:
+      case LocationError.networkError:
+      case LocationError.unknown:
+      default:
+        // 定位超时或其他错误
+        title = '定位失败';
+        subtitle = _locationErrorMessage ?? '请检查网络或GPS信号后重试';
+        icon = Icons.error_outline_rounded;
+        actions = [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: _getWeatherByLocation,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('重试'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _clearLocationError();
+                _showCitySelector();
+              },
+              icon: const Icon(Icons.location_city_rounded, size: 18),
+              label: const Text('手动选择'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ];
+        break;
+    }
+
+    return Card(
+      elevation: 0,
+      color: colorScheme.errorContainer.withValues(alpha: 0.3),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: colorScheme.error.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 24,
+                    color: colorScheme.error,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.error,
+                        ),
+                      ),
+                      Text(
+                        subtitle,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(children: actions),
+          ],
         ),
       ),
     );
@@ -1807,6 +2170,32 @@ class _HomeScreenState extends State<HomeScreen>
             // 加载新城市的天气
             _loadWeather(forceRefresh: true);
           }
+        },
+        // 定位回调：使用当前位置
+        onLocationRequest: () async {
+          final result = await weatherService.locationService.getCurrentCity();
+          if (result.success && result.city != null) {
+            // 保存定位城市
+            await AuthStorage.saveWeatherCity(
+              result.city!.pinyin,
+              result.city!.name,
+            );
+            // 保存最后定位城市（用于回退）
+            await AuthStorage.saveLastLocatedCity(
+              result.city!.pinyin,
+              result.city!.name,
+            );
+            // 更新状态
+            if (mounted) {
+              setState(() {
+                _hasCity = true;
+                _cityName = result.city!.name;
+              });
+              // 加载新城市的天气
+              _loadWeather(forceRefresh: true);
+            }
+          }
+          return result;
         },
       ),
     );
@@ -3024,8 +3413,13 @@ class _HomeScreenState extends State<HomeScreen>
 /// 城市选择器组件
 class _CitySelector extends StatefulWidget {
   final Function(String cityPinyin, String cityName) onCitySelected;
+  /// 定位请求回调，返回定位结果
+  final Future<LocationCityResult> Function()? onLocationRequest;
 
-  const _CitySelector({required this.onCitySelected});
+  const _CitySelector({
+    required this.onCitySelected,
+    this.onLocationRequest,
+  });
 
   @override
   State<_CitySelector> createState() => _CitySelectorState();
@@ -3041,6 +3435,10 @@ class _CitySelectorState extends State<_CitySelector> {
   List<String> _districts = [];
   bool _isLoading = true;
 
+  // 定位相关状态
+  bool _isLocating = false;
+  String? _locationError;
+
   // 用于控制列表滚动位置
   final ScrollController _scrollController = ScrollController();
 
@@ -3048,6 +3446,68 @@ class _CitySelectorState extends State<_CitySelector> {
   void initState() {
     super.initState();
     _loadProvinces();
+  }
+
+  /// 处理使用当前位置
+  Future<void> _handleUseCurrentLocation() async {
+    if (widget.onLocationRequest == null) return;
+
+    setState(() {
+      _isLocating = true;
+      _locationError = null;
+    });
+
+    try {
+      final result = await widget.onLocationRequest!();
+
+      if (!mounted) return;
+
+      if (result.success && result.city != null) {
+        // 定位成功，构建城市名称
+        String cityName = result.city!.name;
+        if (result.city!.district != null &&
+            result.city!.district!.isNotEmpty &&
+            result.city!.district != result.city!.name) {
+          cityName = '${result.city!.name} · ${result.city!.district}';
+        }
+
+        // 调用回调并关闭选择器
+        widget.onCitySelected(result.city!.pinyin, cityName);
+        Navigator.of(context).pop();
+      } else {
+        // 定位失败，显示错误
+        setState(() {
+          _isLocating = false;
+          _locationError = result.errorMessage ?? _getErrorMessage(result.error);
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLocating = false;
+        _locationError = '定位失败，请重试';
+      });
+    }
+  }
+
+  /// 获取错误消息
+  String _getErrorMessage(LocationError? error) {
+    switch (error) {
+      case LocationError.permissionDenied:
+        return '位置权限被拒绝';
+      case LocationError.permissionDeniedForever:
+        return '位置权限被永久拒绝，请在设置中开启';
+      case LocationError.serviceDisabled:
+        return '定位服务未开启';
+      case LocationError.timeout:
+        return '定位超时，请重试';
+      case LocationError.geocodeFailed:
+        return '无法获取城市信息';
+      case LocationError.networkError:
+        return '网络错误，请检查网络连接';
+      default:
+        return '定位失败，请重试';
+    }
   }
 
   Future<void> _loadProvinces() async {
@@ -3192,6 +3652,10 @@ class _CitySelectorState extends State<_CitySelector> {
           ),
           const Divider(height: 1),
 
+          // 使用当前位置选项
+          if (widget.onLocationRequest != null)
+            _buildLocationOption(theme, colorScheme),
+
           // 已选择的路径
           if (_selectedProvince != null)
             Padding(
@@ -3242,6 +3706,85 @@ class _CitySelectorState extends State<_CitySelector> {
           Flexible(child: _buildSelectionList(theme, colorScheme)),
         ],
       ),
+    );
+  }
+
+  /// 构建使用当前位置选项
+  Widget _buildLocationOption(ThemeData theme, ColorScheme colorScheme) {
+    return Column(
+      children: [
+        InkWell(
+          onTap: _isLocating ? null : _handleUseCurrentLocation,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: _isLocating
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colorScheme.primary,
+                          ),
+                        )
+                      : Icon(
+                          Icons.my_location_rounded,
+                          size: 20,
+                          color: colorScheme.primary,
+                        ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '使用当前位置',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (_isLocating)
+                        Text(
+                          '正在定位...',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else if (_locationError != null)
+                        Text(
+                          _locationError!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.error,
+                          ),
+                        )
+                      else
+                        Text(
+                          '自动获取当前位置的天气',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+      ],
     );
   }
 

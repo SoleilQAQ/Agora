@@ -62,49 +62,68 @@ class _ProfileScreenState extends State<ProfileScreen>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return ListenableBuilder(
-      listenable: widget.dataManager,
-      builder: (context, child) {
-        final isLoading = widget.dataManager.userState == LoadingState.loading;
-        final user = widget.dataManager.user;
+    return FutureBuilder<bool>(
+      future: AuthStorage.getSkipJwxtLogin(),
+      builder: (context, skipSnapshot) {
+        final skipJwxtLogin = skipSnapshot.data ?? false;
 
-        return Scaffold(
-          body: RefreshIndicator(
-            onRefresh: () =>
-                widget.dataManager.loadUserInfo(forceRefresh: true),
-            child: ListView(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + 16,
-                left: 16,
-                right: 16,
-                bottom: 80,
+        return ListenableBuilder(
+          listenable: widget.dataManager,
+          builder: (context, child) {
+            final isLoading =
+                widget.dataManager.userState == LoadingState.loading;
+            final user = widget.dataManager.user;
+
+            return Scaffold(
+              body: RefreshIndicator(
+                onRefresh: () =>
+                    widget.dataManager.loadUserInfo(forceRefresh: true),
+                child: ListView(
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + 16,
+                    left: 16,
+                    right: 16,
+                    bottom: 80,
+                  ),
+                  children: [
+                    // 顶部用户信息
+                    if (!skipJwxtLogin)
+                      _buildUserHeader(theme, colorScheme, user, isLoading)
+                    else
+                      _buildSimpleHeader(theme, colorScheme),
+                    const SizedBox(height: 16),
+
+                    // 学业概览（仅非学习通模式）
+                    if (!skipJwxtLogin) ...[
+                      _buildAcademicCard(theme, colorScheme),
+                      const SizedBox(height: 12),
+
+                      // 基本信息
+                      _buildInfoCard(theme, colorScheme, user),
+                      const SizedBox(height: 12),
+                    ],
+
+                    // 设置
+                    _buildSettingsCard(theme, colorScheme),
+                    const SizedBox(height: 12),
+
+                    // 其他
+                    _buildOtherCard(theme, colorScheme),
+                    const SizedBox(height: 12),
+
+                    // 仅学习通模式提示（如果适用）
+                    if (skipJwxtLogin) ...[
+                      _buildLoginJwxtCard(theme, colorScheme),
+                      const SizedBox(height: 12),
+                    ],
+
+                    // 退出登录
+                    _buildLogoutButton(theme, colorScheme),
+                  ],
+                ),
               ),
-              children: [
-                // 顶部用户信息
-                _buildUserHeader(theme, colorScheme, user, isLoading),
-                const SizedBox(height: 16),
-
-                // 学业概览（可折叠）
-                _buildAcademicCard(theme, colorScheme),
-                const SizedBox(height: 12),
-
-                // 基本信息
-                _buildInfoCard(theme, colorScheme, user),
-                const SizedBox(height: 12),
-
-                // 设置
-                _buildSettingsCard(theme, colorScheme),
-                const SizedBox(height: 12),
-
-                // 其他
-                _buildOtherCard(theme, colorScheme),
-                const SizedBox(height: 16),
-
-                // 退出登录
-                _buildLogoutButton(theme, colorScheme),
-              ],
-            ),
-          ),
+            );
+          },
         );
       },
     );
@@ -173,6 +192,58 @@ class _ProfileScreenState extends State<ProfileScreen>
                   color: colorScheme.primary,
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建学习通模式简化头部
+  Widget _buildSimpleHeader(ThemeData theme, ColorScheme colorScheme) {
+    return Card(
+      elevation: 0,
+      color: colorScheme.primaryContainer.withValues(alpha: 0.4),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: colorScheme.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(
+                Icons.menu_book_rounded,
+                color: colorScheme.primary,
+                size: 32,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '学习通模式',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '使用学习通签到功能',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onPrimaryContainer.withValues(
+                        alpha: 0.7,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -554,6 +625,61 @@ class _ProfileScreenState extends State<ProfileScreen>
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建登录教务系统卡片（仅学习通模式）
+  Widget _buildLoginJwxtCard(ThemeData theme, ColorScheme colorScheme) {
+    return Card(
+      elevation: 0,
+      color: colorScheme.primaryContainer.withValues(alpha: 0.4),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        onTap: _showLoginJwxtDialog,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.school_outlined,
+                  color: colorScheme.primary,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '登录教务系统',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '查看课程表、成绩等更多功能',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.arrow_forward_rounded, color: colorScheme.primary),
+            ],
+          ),
         ),
       ),
     );
@@ -1495,28 +1621,36 @@ class _ProfileScreenState extends State<ProfileScreen>
                         theme,
                         colorScheme,
                         null,
-                        '本应用尊重并保护用户的个人信息安全。为了向您提供课程表查询、成绩查询等服务，本隐私政策将向您说明我们如何处理您的个人信息。请在使用本应用前仔细阅读并理解本政策内容。',
+                        '本应用（阿果拉）尊重并保护用户的个人信息安全。为了向您提供课程表查询、成绩查询、学习通作业管理等服务，本隐私政策将向您说明我们如何处理您的个人信息。请在使用本应用前仔细阅读并理解本政策内容。\n\n'
+                            '生效日期：2025年12月17日',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
                         '一、我们收集的信息及用途',
                         '本应用仅在必须时收集以下信息，用于登录学校教务系统及学习通平台，查询您的个人学业数据：\n\n'
-                            '• 学号、密码：仅用于登录学校教务系统，以便获取您的课程表、成绩等信息。\n\n'
-                            '• 学习通账号、密码（可选）：仅用于登录学习通平台，以便获取未交作业、进行中活动等信息。\n\n'
-                            '上述信息不会保存到服务器，不会上传或共享，仅在本地设备存储和使用。\n\n'
-                            '通过教务系统获取的信息包括：用户姓名、班级、专业、入学年份、课程表信息、成绩信息。\n\n'
-                            '通过学习通平台获取的信息包括：课程列表、作业信息、活动信息（签到、测验等）。\n\n'
+                            '1. 账号信息\n'
+                            '• 教务系统账号、密码：用于登录学校教务系统，获取课程表、成绩等信息\n'
+                            '• 学习通账号、密码（可选）：用于登录学习通平台，获取未交作业、进行中活动等信息\n'
+                            '• 天气城市信息（可选）：用于获取并展示您所在城市的天气信息\n\n'
+                            '上述信息不会保存到服务器，不会上传或共享，仅在本地设备存储。账号密码采用加密方式存储。\n\n'
+                            '2. 通过教务系统获取的信息\n'
+                            '用户姓名、学号、班级、专业、入学年份、课程表信息、成绩信息。\n\n'
+                            '3. 通过学习通平台获取的信息（仅在配置学习通账号后）\n'
+                            '课程列表、未交作业信息、进行中的活动信息（签到、测验、问卷等）、活动截止时间。\n\n'
+                            '4. 设备权限\n'
+                            '• 通知权限：用于发送作业截止提醒、活动提醒、课程上课提醒\n'
+                            '• 本地存储权限：用于导出课表文件（如 iCal、Excel）\n\n'
                             '上述数据仅用于展示与提供学习相关服务。',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
                         '二、数据的存储方式',
-                        '• 本应用不建立任何服务器数据库，不进行云端存储。\n'
-                            '• 所有从教务系统和学习通获取的信息仅存储在用户本地设备。\n'
-                            '• 学习通账号密码以加密方式存储在本地。\n'
-                            '• 您可随时在本地删除应用数据或清除学习通配置，即可清除所有本地存储的信息。',
+                        '• 本应用不建立任何服务器数据库，不进行云端存储\n'
+                            '• 所有从教务系统和学习通获取的信息仅存储在用户本地设备\n'
+                            '• 账号密码以加密方式存储在本地\n'
+                            '• 您可随时在应用内删除账号、清除数据，或卸载应用以清除所有本地存储的信息',
                       ),
                       _buildPrivacySection(
                         theme,
@@ -1526,50 +1660,82 @@ class _ProfileScreenState extends State<ProfileScreen>
                             '• 查询并展示课程表\n'
                             '• 查询并展示成绩\n'
                             '• 查询并展示学习通未交作业\n'
-                            '• 查询并展示学习通进行中活动（签到、测验等）\n'
+                            '• 查询并展示学习通进行中活动（签到、测验、问卷等）\n'
                             '• 提供作业截止和活动结束提醒通知\n'
-                            '• 提供与学业相关的功能服务\n\n'
+                            '• 提供课程上课提醒通知\n'
+                            '• 展示天气信息（基于用户选择的城市）\n'
+                            '• 提供课表导出功能（iCal、Excel 格式）\n'
+                            '• 提供与学业相关的其他功能服务\n\n'
                             '不会用于任何广告、分析、统计、用户画像、销售或其它与提供服务无关的用途。',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
-                        '四、我们不会进行的行为',
+                        '四、第三方服务',
+                        '本应用会访问以下第三方服务以提供功能：\n\n'
+                            '• 学校教务系统：获取课程表、成绩信息（HTTPS 加密）\n'
+                            '• 学习通平台：获取作业、活动信息（HTTPS 加密）\n'
+                            '• 天气服务（OpenWeatherMap）：获取天气信息（仅传输城市名称）\n'
+                            '• 应用更新检查（GitHub）：检查版本更新（不传输用户数据）\n\n'
+                            '所有网络通信均采用 HTTPS 加密传输。',
+                      ),
+                      _buildPrivacySection(
+                        theme,
+                        colorScheme,
+                        '五、我们不会进行的行为',
                         '本应用郑重承诺：\n\n'
-                            '• 不会将任何信息上传至服务器\n'
+                            '• 不会将任何账号、密码、个人信息上传至服务器\n'
                             '• 不会与任何第三方共享您的数据\n'
                             '• 不会用于广告或营销\n'
                             '• 不会存储、分析或传播用户的隐私信息\n'
-                            '• 不会收集与服务无关的个人信息',
+                            '• 不会收集与服务无关的个人信息\n'
+                            '• 不会在后台自动上传数据\n'
+                            '• 不含任何广告或数据追踪代码',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
-                        '五、数据安全',
-                        '由于本应用不进行服务器存储，确保您的数据安全主要依赖您本地设备的安全性。\n\n'
-                            '应用仅在必要时与学校教务系统和学习通平台通信，不会与其他服务器通信。\n\n'
-                            '与学习通平台的通信采用 HTTPS 加密传输，登录凭证安全可靠。',
+                        '六、数据安全',
+                        '• 由于本应用不进行服务器存储，确保您的数据安全主要依赖您本地设备的安全性\n'
+                            '• 应用仅在必要时与学校教务系统、学习通平台和天气服务通信\n'
+                            '• 所有网络通信均采用 HTTPS 加密传输\n'
+                            '• 账号密码在本地采用加密存储\n'
+                            '• 建议您为设备设置锁屏密码，并保管好设备',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
-                        '六、您的权利',
+                        '七、您的权利',
                         '您拥有以下权利：\n\n'
-                            '• 随时删除本地存储的全部数据\n'
-                            '• 停止使用本应用，即可终止所有数据处理\n'
-                            '• 随时查看、更新或清除在本地保存的个人信息',
+                            '• 查看权：随时查看应用内保存的所有数据\n'
+                            '• 修改权：随时修改账号信息、城市设置等\n'
+                            '• 删除权：随时删除本地存储的全部数据\n'
+                            '• 停用权：停止使用本应用，即可终止所有数据处理\n'
+                            '• 导出权：可导出课表为 iCal 或 Excel 格式\n\n'
+                            '您可以在应用设置中清除数据、在账号管理中删除账号，或卸载应用以清除所有本地数据。',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
-                        '七、政策更新',
-                        '根据功能调整或法律法规变化，本政策可能适时更新。更新后的政策会在应用中同步展示。',
+                        '八、未成年人保护',
+                        '如果您是未成年人（18 周岁以下），请在监护人的陪同下阅读本隐私政策，并在使用本应用前取得监护人的同意。',
                       ),
                       _buildPrivacySection(
                         theme,
                         colorScheme,
-                        '八、联系我们',
-                        '如您对本隐私政策或个人信息保护有任何疑问，可通过应用内联系方式向我们反馈。',
+                        '九、政策更新',
+                        '根据功能调整或法律法规变化，本政策可能适时更新。我们会在应用内发布更新通知。重大变更时，我们会通过明显方式提示您。\n\n'
+                            '政策更新后，您继续使用本应用即表示同意更新后的隐私政策。',
+                      ),
+                      _buildPrivacySection(
+                        theme,
+                        colorScheme,
+                        '十、联系我们',
+                        '如您对本隐私政策或个人信息保护有任何疑问、意见或建议，可通过以下方式联系我们：\n\n'
+                            '• 应用内反馈\n'
+                            '• GitHub Issues：https://github.com/SoleilQAQ/Agora/issues\n\n'
+                            '我们会在收到您的反馈后尽快回复。\n\n'
+                            '最后更新：2025年12月17日',
                       ),
                       const SizedBox(height: 24),
                     ],
@@ -1700,6 +1866,100 @@ class _ProfileScreenState extends State<ProfileScreen>
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                     child: const Text('退出登录'),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: MediaQuery.of(context).padding.bottom),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 显示登录教务系统对话框
+  void _showLoginJwxtDialog() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖拽指示器
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colorScheme.outline.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 24),
+            // 图标
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: colorScheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.school_outlined,
+                size: 32,
+                color: colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 20),
+            // 标题
+            Text(
+              '登录教务系统',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // 提示内容
+            Text(
+              '登录后可以查看课程表、成绩等信息。\n请在账号管理中添加教务系统账号。',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            // 按钮区域
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text('取消'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      // 打开账号管理页面
+                      _openAccountManage();
+                    },
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text('添加账号'),
                   ),
                 ),
               ],

@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'auth_storage.dart';
+import 'location_service.dart';
 
 /// 天气信息
 class WeatherInfo {
@@ -251,11 +252,47 @@ class WeatherInfo {
   }
 }
 
+/// 天气获取结果（包含定位状态）
+class WeatherResult {
+  final bool success;
+  final WeatherInfo? weather;
+  final LocationError? locationError;
+  final String? errorMessage;
+
+  const WeatherResult({
+    required this.success,
+    this.weather,
+    this.locationError,
+    this.errorMessage,
+  });
+
+  /// 创建成功结果
+  factory WeatherResult.success(WeatherInfo weather) {
+    return WeatherResult(
+      success: true,
+      weather: weather,
+    );
+  }
+
+  /// 创建失败结果
+  factory WeatherResult.failure({
+    LocationError? locationError,
+    String? errorMessage,
+  }) {
+    return WeatherResult(
+      success: false,
+      locationError: locationError,
+      errorMessage: errorMessage,
+    );
+  }
+}
+
 /// 天气服务
 class WeatherService {
   static const String _baseUrl = 'http://47.122.112.62:8000';
 
   Dio? _dio;
+  LocationService? _locationService;
 
   /// 懒加载 Dio 实例，减少内存占用
   Dio get dio {
@@ -272,12 +309,14 @@ class WeatherService {
       responseBody: true,
     ));
 
-
-
     return _dio!;
   }
 
-
+  /// 懒加载 LocationService 实例
+  LocationService get locationService {
+    _locationService ??= LocationService();
+    return _locationService!;
+  }
 
   WeatherService();
 
@@ -390,9 +429,72 @@ class WeatherService {
     return cityPinyin != null && cityPinyin.isNotEmpty;
   }
 
+  /// 通过自动定位获取天气
+  /// 完整流程：定位 -> 反向编码 -> 保存城市 -> 获取天气
+  /// 
+  /// 实现定位回退逻辑：
+  /// - 如果反向地理编码失败，使用最后一次成功定位的城市
+  /// - Requirements: 1.4, 1.5, 3.3
+  Future<WeatherResult> getWeatherByLocation() async {
+    // 1. 获取当前位置的城市信息
+    final locationResult = await locationService.getCurrentCity();
+
+    CityInfo? cityInfo;
+
+    if (locationResult.success && locationResult.city != null) {
+      // 定位成功，使用定位结果
+      cityInfo = locationResult.city;
+
+      // 保存定位城市作为默认天气城市（Requirements: 1.5）
+      await AuthStorage.saveWeatherCity(cityInfo!.pinyin, cityInfo.name);
+
+      // 保存最后成功定位的城市（用于回退）
+      await AuthStorage.saveLastLocatedCity(cityInfo.pinyin, cityInfo.name);
+
+      debugPrint('定位成功: ${cityInfo.name} (${cityInfo.pinyin})');
+    } else if (locationResult.error == LocationError.geocodeFailed) {
+      // 反向地理编码失败，尝试使用最后定位的城市（Requirements: 3.3）
+      final (lastPinyin, lastName) = await AuthStorage.getLastLocatedCity();
+
+      if (lastPinyin != null && lastName != null && lastPinyin.isNotEmpty) {
+        debugPrint('反向编码失败，使用最后定位城市: $lastName ($lastPinyin)');
+        cityInfo = CityInfo(name: lastName, pinyin: lastPinyin);
+      } else {
+        // 没有保存的城市，返回定位失败
+        return WeatherResult.failure(
+          locationError: locationResult.error,
+          errorMessage: locationResult.errorMessage ?? '无法获取城市信息',
+        );
+      }
+    } else {
+      // 其他定位错误（权限、GPS等），直接返回错误
+      return WeatherResult.failure(
+        locationError: locationResult.error,
+        errorMessage: locationResult.errorMessage,
+      );
+    }
+
+    // 2. 使用城市信息获取天气
+    try {
+      final weather = await getWeatherByCity(
+        cityPinyin: cityInfo.pinyin,
+        forceRefresh: true,
+      );
+
+      return WeatherResult.success(weather);
+    } catch (e) {
+      debugPrint('获取天气失败: $e');
+      return WeatherResult.failure(
+        errorMessage: '获取天气数据失败: $e',
+      );
+    }
+  }
+
   void dispose() {
     _dio?.close();
     _dio = null;
+    _locationService?.dispose();
+    _locationService = null;
   }
 }
 

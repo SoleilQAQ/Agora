@@ -43,13 +43,15 @@ class _GradesScreenState extends State<GradesScreen>
   }
 
   /// 计算所有学期的总平均绩点（加权平均）
+  /// 只计算及格课程的绩点
   double? _calculateOverallAverageGpa(List<SemesterGrades> allGrades) {
     var totalPoints = 0.0;
     var totalCredits = 0.0;
 
     for (final semesterGrades in allGrades) {
       for (final grade in semesterGrades.grades) {
-        if (grade.gpa != null) {
+        // 只计算有绩点且及格的课程
+        if (grade.gpa != null && grade.isPassed) {
           totalPoints += grade.gpa! * grade.credit;
           totalCredits += grade.credit;
         }
@@ -450,13 +452,13 @@ class _GradesScreenState extends State<GradesScreen>
                 _buildOverallStatItem(
                   theme,
                   colorScheme,
-                  '总平均分',
+                  '平均分',
                   overallAvgScore?.toStringAsFixed(1) ?? '--',
                 ),
                 _buildOverallStatItem(
                   theme,
                   colorScheme,
-                  '总绩点',
+                  '平均绩点',
                   overallAvgGpa?.toStringAsFixed(2) ?? '--',
                 ),
                 _buildOverallStatItem(
@@ -704,6 +706,16 @@ class _GradesScreenState extends State<GradesScreen>
       }
     }
 
+    // 处理成绩显示文本，长文本使用缩写
+    String displayScore = grade.score;
+    double scoreFontSize = 22; // 默认字号
+    if (grade.score == '不合格' || grade.score == '不及格') {
+      displayScore = '不及格';
+      scoreFontSize = 14;
+    } else if (grade.score.length > 3) {
+      scoreFontSize = 16;
+    }
+
     return Card(
       elevation: 0,
       color: colorScheme.surfaceContainerLow,
@@ -725,11 +737,15 @@ class _GradesScreenState extends State<GradesScreen>
                 ),
                 alignment: Alignment.center,
                 child: Text(
-                  grade.score,
-                  style: theme.textTheme.titleLarge?.copyWith(
+                  displayScore,
+                  style: TextStyle(
                     color: scoreColor,
                     fontWeight: FontWeight.bold,
+                    fontSize: scoreFontSize,
                   ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 16),
