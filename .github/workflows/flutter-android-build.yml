@@ -1,90 +1,90 @@
-#name: Build and Sign Android APK
-#
-#on:
-#  push:
-#    branches:
-#      - master
-#  pull_request:
-#    branches:
-#      - master
-#  workflow_dispatch:
-#
-#jobs:
-#  build:
-#    runs-on: ubuntu-latest
-#    permissions:
-#      contents: read
-#
-#    # secrets 仅在 push/workflow_dispatch 等受信任触发中可用；来自 fork 的 PR 触发将为空（GitHub 安全策略）。
-#    env:
-#      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-#      # 兼容旧命名：如果你之前把 base64 内容存到 KEYSTORE_FILE，也能继续用
-#      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }}
-#      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-#      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-#      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-#
-#    steps:
-#      - name: Checkout code
-#        uses: actions/checkout@v4
-#
-#      - name: Set up Java (Android Gradle)
-#        uses: actions/setup-java@v4
-#        with:
-#          distribution: temurin
-#          java-version: "17"
-#
-#      - name: Set up Flutter
-#        uses: subosito/flutter-action@v2
-#        with:
-#          flutter-version: 3.38.4
-#          channel: stable
-#          cache: true
-#
-#      - name: Install dependencies
-#        run: flutter pub get
-#
-#      # push / 手动触发：解码 keystore，写入 Gradle 需要的环境变量
-#      - name: Prepare signing (push only)
-#        if: github.event_name != 'pull_request'
-#        working-directory: android/app
-#        shell: bash
-#        run: |
-#          set -euo pipefail
-#          B64="${KEYSTORE_BASE64:-}"
-#          if [ -z "$B64" ]; then
-#            B64="${KEYSTORE_FILE_B64:-}"
-#          fi
-#
-#          if [ -z "$B64" ]; then
-#            echo "::error::Missing signing keystore secret. Set KEYSTORE_BASE64 (recommended) or legacy KEYSTORE_FILE (base64)."
-#            exit 1
-#          fi
-#          if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
-#            echo "::error::Missing signing password/alias secrets. Need KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD."
-#            exit 1
-#          fi
-#
-#          echo "$B64" | base64 --decode > keystore.jks
-#
-#          echo "KEYSTORE_FILE=keystore.jks" >> $GITHUB_ENV
-#          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
-#          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
-#          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
-#
-#      - name: Build APK (debug for PR)
-#        if: github.event_name == 'pull_request'
-#        run: flutter build apk --debug
-#
-#      - name: Build APK (signed release)
-#        if: github.event_name != 'pull_request'
-#        run: flutter build apk --release
-#
-#      - name: Upload APK as artifact
-#        uses: actions/upload-artifact@v4
-#        with:
-#          name: android-apk
-#          if-no-files-found: ignore
-#          path: |
-#            build/app/outputs/flutter-apk/app-debug.apk
-#            build/app/outputs/flutter-apk/app-release.apk
+name: Build and Sign Android APK
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    # secrets 仅在 push/workflow_dispatch 等受信任触发中可用；来自 fork 的 PR 触发将为空（GitHub 安全策略）。
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      # 兼容旧命名：如果你之前把 base64 内容存到 KEYSTORE_FILE，也能继续用
+      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java (Android Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.38.4
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # push / 手动触发：解码 keystore，写入 Gradle 需要的环境变量
+      - name: Prepare signing (push only)
+        if: github.event_name != 'pull_request'
+        working-directory: android/app
+        shell: bash
+        run: |
+          set -euo pipefail
+          B64="${KEYSTORE_BASE64:-}"
+          if [ -z "$B64" ]; then
+            B64="${KEYSTORE_FILE_B64:-}"
+          fi
+
+          if [ -z "$B64" ]; then
+            echo "::error::Missing signing keystore secret. Set KEYSTORE_BASE64 (recommended) or legacy KEYSTORE_FILE (base64)."
+            exit 1
+          fi
+          if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
+            echo "::error::Missing signing password/alias secrets. Need KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD."
+            exit 1
+          fi
+
+          echo "$B64" | base64 --decode > keystore.jks
+
+          echo "KEYSTORE_FILE=keystore.jks" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+
+      - name: Build APK (debug for PR)
+        if: github.event_name == 'pull_request'
+        run: flutter build apk --debug
+
+      - name: Build APK (signed release)
+        if: github.event_name != 'pull_request'
+        run: flutter build apk --release
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          if-no-files-found: ignore
+          path: |
+            build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/flutter-apk/app-release.apk
