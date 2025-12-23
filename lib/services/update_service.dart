@@ -1353,34 +1353,69 @@ class UpdateService {
   }
 
   /// 比较版本号，返回 true 表示 newVersion 更新
+  /// 支持格式：1.0.6 或 1.0.6+106 或 1.0.6+106b
   bool _isNewerVersion(String newVersion, String currentVersion) {
-    final newParts = newVersion
+    // 分离主版本号和构建号
+    final newParts = newVersion.split('+');
+    final currentParts = currentVersion.split('+');
+    
+    final newSemver = newParts.first;
+    final currentSemver = currentParts.first;
+    final newBuild = newParts.length > 1 ? newParts[1] : null;
+    final currentBuild = currentParts.length > 1 ? currentParts[1] : null;
+    
+    // 解析主版本号
+    final newVersionParts = newSemver
         .split('.')
         .map((e) => int.tryParse(e) ?? 0)
         .toList();
-    final currentParts = currentVersion
+    final currentVersionParts = currentSemver
         .split('.')
         .map((e) => int.tryParse(e) ?? 0)
         .toList();
 
     // 补齐位数
-    while (newParts.length < 3) {
-      newParts.add(0);
+    while (newVersionParts.length < 3) {
+      newVersionParts.add(0);
     }
-    while (currentParts.length < 3) {
-      currentParts.add(0);
+    while (currentVersionParts.length < 3) {
+      currentVersionParts.add(0);
     }
 
+    // 先比较主版本号
     for (int i = 0; i < 3; i++) {
-      if (newParts[i] > currentParts[i]) return true;
-      if (newParts[i] < currentParts[i]) return false;
+      if (newVersionParts[i] > currentVersionParts[i]) return true;
+      if (newVersionParts[i] < currentVersionParts[i]) return false;
     }
+    
+    // 主版本号相同，比较构建号
+    if (newBuild != null && currentBuild != null) {
+      final newBuildNum = _parseBuildNumber(newBuild);
+      final currentBuildNum = _parseBuildNumber(currentBuild);
+      return newBuildNum > currentBuildNum;
+    }
+    
+    // 新版本有构建号，当前版本没有，认为新版本更新
+    if (newBuild != null && currentBuild == null) return true;
+    
     return false;
+  }
+  
+  /// 解析构建号（支持纯数字或带字母后缀，如 106 或 106b）
+  int _parseBuildNumber(String build) {
+    // 提取开头的数字部分
+    final match = RegExp(r'^(\d+)').firstMatch(build);
+    if (match != null) {
+      return int.tryParse(match.group(1)!) ?? 0;
+    }
+    return 0;
   }
 
   /// 解析版本号为数字
   int _parseVersionCode(String version) {
-    final parts = version.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    // 清理版本号：移除 + 后面的构建号部分
+    final cleanVersion = version.split('+').first;
+    final parts = cleanVersion.split('.').map((e) => int.tryParse(e) ?? 0).toList();
     while (parts.length < 3) {
       parts.add(0);
     }
