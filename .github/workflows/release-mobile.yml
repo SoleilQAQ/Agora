@@ -1,6 +1,6 @@
 name: Release Mobile (Android + iOS)
 
-on:
+'on':
   push:
     branches: [master]
     tags: ["v*"]
@@ -58,8 +58,6 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
-      # 关键点：你的 build.gradle.kts 如果是读 android/key.properties，
-      # 那就必须在 CI 里生成 key.properties（而不仅仅是 export env）
       - name: Prepare Android signing (push/tag only)
         if: github.event_name != 'pull_request'
         working-directory: android/app
@@ -79,10 +77,9 @@ jobs:
             exit 1
           fi
 
-          # decode keystore to android/app/keystore.jks
           echo "$B64" | base64 --decode > keystore.jks
 
-          # write android/key.properties (rootProject.file("key.properties") 常见位置)
+          # 常见 Flutter/Kotlin 签名读取方式：rootProject.file("key.properties")
           cat > ../key.properties <<EOF
           storeFile=keystore.jks
           storePassword=${KEYSTORE_PASSWORD}
@@ -92,10 +89,6 @@ jobs:
 
           echo "Generated android/key.properties"
           ls -al .
-          sed -e 's/storePassword=.*/storePassword=***masked***/' \
-              -e 's/keyPassword=.*/keyPassword=***masked***/' \
-              -e 's/keyAlias=.*/keyAlias=***masked***/' \
-              ../key.properties || true
 
       - name: Build APK (debug for PR)
         if: github.event_name == 'pull_request'
@@ -170,7 +163,6 @@ jobs:
     permissions:
       contents: write
 
-    # 关键点：tag push v* 才自动发；手动 workflow_dispatch 勾选 publish_release 也可发
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.publish_release)
@@ -205,7 +197,6 @@ jobs:
           TAG="${{ steps.vars.outputs.tag }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # 如果已存在则不报错
           git tag -a "$TAG" -m "$TAG" || true
           git push origin "$TAG"
 
@@ -228,7 +219,6 @@ jobs:
           TAG="${{ steps.vars.outputs.tag }}"
           mkdir -p dist/out
 
-          # android: 优先找 release apk
           APK="$(ls -1 dist/android/*release*.apk 2>/dev/null | head -n 1 || true)"
           if [ -z "$APK" ]; then
             APK="$(ls -1 dist/android/*.apk 2>/dev/null | head -n 1 || true)"
@@ -239,7 +229,6 @@ jobs:
           fi
           cp "$APK" "dist/out/Agora-android-${TAG}.apk"
 
-          # ios
           if [ ! -f dist/ios/Agora-unsigned.ipa ]; then
             echo "::error::Missing dist/ios/Agora-unsigned.ipa"
             exit 1
