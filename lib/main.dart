@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'services/services.dart';
 import 'screens/screens.dart';
+import 'models/account.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -295,6 +296,7 @@ class _AppNavigatorState extends State<AppNavigator>
     with SingleTickerProviderStateMixin {
   // 教务系统服务实例
   late final JwxtService _jwxtService;
+
   // 数据管理器
   DataManager? _dataManager;
 
@@ -320,10 +322,8 @@ class _AppNavigatorState extends State<AppNavigator>
     super.initState();
     // const nativeBaseUrl = 'http://10.0.2.2:8000'; emu ip
     const nativeBaseUrl = 'http://47.122.112.62:8000';
-    const proxyBaseUrl  = 'https://api.byteflow.asia';
-    _jwxtService = JwxtService(
-      baseUrl: kIsWeb ? proxyBaseUrl : nativeBaseUrl);
-
+    const proxyBaseUrl = 'https://api.byteflow.asia';
+    _jwxtService = JwxtService(baseUrl: kIsWeb ? proxyBaseUrl : nativeBaseUrl);
 
     // 初始化动画
     _loadingAnimationController = AnimationController(
@@ -354,22 +354,39 @@ class _AppNavigatorState extends State<AppNavigator>
   /// 执行无感自动重登（Cookie 失效时调用）
   Future<bool> _performAutoRelogin() async {
     try {
-      final credentials = await AuthStorage.getCredentials();
-      if (credentials == null) {
-        debugPrint('无保存的凭据，无法自动重登');
+      // 从 AccountManager 获取当前活跃账号
+      final accountManager = AccountManager();
+      final activeAccount = accountManager.activeAccount;
+
+      if (activeAccount == null) {
+        debugPrint('无保存的账号，无法自动重登');
         return false;
       }
 
       debugPrint('正在执行无感自动重登...');
       final result = await _jwxtService.autoLogin(
-        username: credentials.username,
-        password: credentials.password,
+        username: activeAccount.username,
+        password: activeAccount.password,
       );
 
       if (result is LoginSuccess) {
-        debugPrint('无感自动重登成功');
+        debugPrint('无感自动重登教务系统成功');
         // 重置失败计数
         await AuthStorage.resetSilentLoginFailCount();
+
+        // 如果有学习通账号，同时重新登录学习通
+        if (activeAccount.xuexitong != null) {
+          final xxtSuccess = await XxtService().login(
+            activeAccount.xuexitong!.username,
+            activeAccount.xuexitong!.password,
+          );
+          if (xxtSuccess) {
+            debugPrint('无感重登学习通成功');
+          } else {
+            debugPrint('无感重登学习通失败，但继续使用教务系统');
+          }
+        }
+
         return true;
       } else {
         debugPrint('无感自动重登失败');
@@ -411,8 +428,28 @@ class _AppNavigatorState extends State<AppNavigator>
     });
 
     try {
-      final credentials = await AuthStorage.getCredentials();
-      if (credentials != null) {
+      // 检查是否选择仅使用学习通功能
+      final skipJwxtLogin = await AuthStorage.getSkipJwxtLogin();
+      if (skipJwxtLogin) {
+        // 跳过教务系统登录,直接进入应用
+        // 创建一个占位的DataManager以支持MainShell的基本功能
+        _initDataManager();
+
+        if (mounted) {
+          setState(() {
+            _isLoggedIn = true;
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
+      // 从 AccountManager 获取当前活跃账号
+      final accountManager = AccountManager();
+      final activeAccount = accountManager.activeAccount;
+
+      if (activeAccount != null) {
+        // 有活跃账号，直接进入主页（无感登录）
         // 有保存的凭据，直接进入主页（无感登录）
         // Cookie 失效时会通过 _performAutoRelogin 在后台自动处理
         _hasCredentials = true;
@@ -429,14 +466,18 @@ class _AppNavigatorState extends State<AppNavigator>
         }
 
         // 在后台静默执行登录以获取/刷新 Cookie
-        _performSilentLogin(credentials.username, credentials.password);
+        _performSilentLogin(
+          activeAccount.username,
+          activeAccount.password,
+          activeAccount.xuexitong,
+        );
         return;
       }
     } catch (e) {
-      debugPrint('检查凭据失败: $e');
+      debugPrint('检查账号失败: $e');
     }
 
-    // 没有保存的凭据，显示登录页面
+    // 没有活跃账号，显示登录页面
     if (mounted) {
       setState(() {
         _isLoading = false;
@@ -445,28 +486,37 @@ class _AppNavigatorState extends State<AppNavigator>
   }
 
   /// 后台静默登录（不影响前端显示）
-  Future<void> _performSilentLogin(String username, String password) async {
+  Future<void> _performSilentLogin(
+    String username,
+    String password,
+    XuexitongAccount? xuexitong,
+  ) async {
     try {
-      debugPrint('正在后台静默登录...');
+      debugPrint('正在后台静默登录教务系统...');
       final result = await _jwxtService.autoLogin(
         username: username,
         password: password,
       );
 
       if (result is LoginSuccess) {
-        debugPrint('后台静默登录成功');
+        debugPrint('后台静默登录教务系统成功');
         await AuthStorage.resetSilentLoginFailCount();
 
-        // 确保账号同步到账号管理器（兼容旧版升级的用户）
-        final displayName = _jwxtService.currentUser?.name;
-        await AccountManager().addAccount(
-          username: username,
-          password: password,
-          displayName: displayName,
-          setAsActive: true,
-        );
+        // 如果有学习通账号，同时登录学习通
+        if (xuexitong != null) {
+          debugPrint('正在后台静默登录学习通...');
+          final xxtSuccess = await XxtService().login(
+            xuexitong.username,
+            xuexitong.password,
+          );
+          if (xxtSuccess) {
+            debugPrint('后台静默登录学习通成功');
+          } else {
+            debugPrint('后台静默登录学习通失败');
+          }
+        }
       } else {
-        debugPrint('后台静默登录失败');
+        debugPrint('后台静默登录教务系统失败');
         final failCount = await AuthStorage.incrementSilentLoginFailCount();
         debugPrint('静默登录失败次数: $failCount');
 
@@ -523,22 +573,24 @@ class _AppNavigatorState extends State<AppNavigator>
       _loadingMessage = '正在切换账号...';
     });
 
+    // 1. 完全清除所有服务状态
     await _jwxtService.logout();
-
-    // 清除当前数据缓存
-    await AuthStorage.clearAllDataCache();
-    _dataManager?.clearCache();
-
-
-    // 清除学习通登录状态
     XxtService().clearSession();
 
-    // 获取当前活跃账号
+    // 2. 清除数据管理器
+    _dataManager?.dispose();
+    _dataManager = null;
+
+    // 3. 清除所有数据缓存
+    await AuthStorage.clearAllDataCache();
+
+    // 4. 获取当前活跃账号
     final accountManager = AccountManager();
     final activeAccount = accountManager.activeAccount;
 
     if (activeAccount == null) {
       // 没有活跃账号，跳转到登录页面
+      await AuthStorage.setSkipJwxtLogin(false);
       setState(() {
         _isLoading = false;
         _isLoggedIn = false;
@@ -547,6 +599,56 @@ class _AppNavigatorState extends State<AppNavigator>
       return;
     }
 
+    // 5. 判断是否为纯学习通账号（教务系统账号密码为空）
+    final isXuexitongOnly = activeAccount.username.isEmpty || activeAccount.password.isEmpty;
+
+    if (isXuexitongOnly) {
+      // 纯学习通账号模式
+      debugPrint('账号切换：检测到纯学习通账号');
+      await AuthStorage.setSkipJwxtLogin(true);
+
+      // 登录学习通
+      if (activeAccount.xuexitong != null) {
+        setState(() {
+          _loadingMessage = '正在登录学习通...';
+        });
+
+        final xxtSuccess = await XxtService().login(
+          activeAccount.xuexitong!.username,
+          activeAccount.xuexitong!.password,
+        );
+
+        if (xxtSuccess) {
+          debugPrint('账号切换：学习通登录成功');
+        } else {
+          debugPrint('账号切换：学习通登录失败');
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+              _isLoggedIn = false;
+              _loginErrorMessage = '学习通登录失败，请检查账号密码';
+            });
+          }
+          return;
+        }
+      }
+
+      // 初始化数据管理器（学习通模式）
+      _initDataManager();
+
+      if (mounted) {
+        setState(() {
+          _isLoggedIn = true;
+          _isLoading = false;
+          _loginErrorMessage = null;
+        });
+      }
+      return;
+    }
+
+    // 6. 教务系统账号模式
+    await AuthStorage.setSkipJwxtLogin(false);
+
     // 保存新账号的凭据到 AuthStorage（用于自动登录）
     await AuthStorage.saveCredentials(
       username: activeAccount.username,
@@ -554,9 +656,9 @@ class _AppNavigatorState extends State<AppNavigator>
     );
 
     try {
-      // 使用新账号登录
+      // 7. 使用新账号登录教务系统
       setState(() {
-        _loadingMessage = '正在登录...';
+        _loadingMessage = '正在登录教务系统...';
       });
 
       final result = await _jwxtService.autoLogin(
@@ -564,39 +666,57 @@ class _AppNavigatorState extends State<AppNavigator>
         password: activeAccount.password,
       );
 
-      if (result is LoginSuccess) {
-        debugPrint('账号切换登录成功');
-        await AuthStorage.resetSilentLoginFailCount();
-
-        // 更新账号管理器中的显示名称（如果获取到了用户名）
-        if (_jwxtService.currentUser?.name != null) {
-          await accountManager.updateDisplayName(
-            activeAccount.id,
-            _jwxtService.currentUser!.name,
-          );
-        }
-
-        // 重新初始化数据管理器
-        _initDataManager();
-        _dataManager?.initialize(delayedRefresh: false);
-
-        if (mounted) {
-          setState(() {
-            _isLoggedIn = true;
-            _isLoading = false;
-            _loginErrorMessage = null;
-          });
-        }
-      } else {
-        // 登录失败
-        debugPrint('账号切换登录失败');
+      if (result is! LoginSuccess) {
+        debugPrint('账号切换：教务系统登录失败');
         if (mounted) {
           setState(() {
             _isLoading = false;
             _isLoggedIn = false;
-            _loginErrorMessage = '账号登录失败，请检查账号密码';
+            _loginErrorMessage = '账号切换：教务系统登录失败';
           });
         }
+        return;
+      }
+
+      debugPrint('账号切换：教务系统登录成功');
+      await AuthStorage.resetSilentLoginFailCount();
+
+      // 8. 更新账号管理器中的显示名称（如果获取到了用户名）
+      if (_jwxtService.currentUser?.name != null) {
+        await accountManager.updateDisplayName(
+          activeAccount.id,
+          _jwxtService.currentUser!.name,
+        );
+      }
+
+      // 9. 如果有学习通账号，登录学习通
+      if (activeAccount.xuexitong != null) {
+        setState(() {
+          _loadingMessage = '正在登录学习通...';
+        });
+
+        final xxtSuccess = await XxtService().login(
+          activeAccount.xuexitong!.username,
+          activeAccount.xuexitong!.password,
+        );
+
+        if (xxtSuccess) {
+          debugPrint('账号切换：学习通登录成功');
+        } else {
+          debugPrint('账号切换：学习通登录失败，但继续使用教务系统');
+        }
+      }
+
+      // 10. 重新初始化数据管理器
+      _initDataManager();
+      await _dataManager?.initialize(delayedRefresh: false);
+
+      if (mounted) {
+        setState(() {
+          _isLoggedIn = true;
+          _isLoading = false;
+          _loginErrorMessage = null;
+        });
       }
     } catch (e) {
       debugPrint('账号切换异常: $e');
@@ -615,7 +735,7 @@ class _AppNavigatorState extends State<AppNavigator>
     await AuthStorage.clearCredentials();
     await AuthStorage.clearAllDataCache(); // 清除所有数据缓存
     await AuthStorage.resetSilentLoginFailCount(); // 重置失败计数
-    // TODO jwxt的cookie未清空
+    await AuthStorage.setSkipJwxtLogin(false); // 清除跳过登录标志
     XxtService().clearSession(); // 清除学习通登录状态
     _dataManager?.dispose();
     _dataManager = null;

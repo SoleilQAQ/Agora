@@ -3,6 +3,9 @@
 /// 处理登录凭据的持久化存储
 library;
 
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 存储的凭据
@@ -23,6 +26,8 @@ class AuthStorage {
   static const String _keySemesterStartDate = 'semester_start_date';
   static const String _keySilentLoginFailCount =
       'silent_login_fail_count'; // 静默登录失败次数
+  static const String _keySkipJwxtLogin =
+      'skip_jwxt_login'; // 跳过教务系统登录，仅使用学习通功能
 
   // 缓存相关 keys
   static const String _keyWeatherCache = 'cache_weather';
@@ -66,6 +71,16 @@ class AuthStorage {
   // 天气API限流相关 keys
   static const String _keyWeatherApiCallTimes = 'weather_api_call_times';
   static const int weatherApiMaxCallsPerMinute = 5; // 每分钟最多调用5次
+
+  // 已完成签退的活动ID列表 key
+  static const String _keyCompletedSignOutActivityIds =
+      'completed_signout_activity_ids';
+
+  // 有签退的活动ID列表缓存 key（所有检测到有签退的活动）
+  static const String _keyActivitiesWithSignOut = 'activities_with_signout';
+
+  // 有签退活动的详细信息缓存 key（JSON格式存储）
+  static const String _keySignOutActivitiesCache = 'signout_activities_cache';
 
   /// 保存登录凭据
   static Future<void> saveCredentials({
@@ -146,6 +161,18 @@ class AuthStorage {
   static Future<int> getSilentLoginFailCount() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_keySilentLoginFailCount) ?? 0;
+  }
+
+  /// 保存跳过教务系统登录标志
+  static Future<void> setSkipJwxtLogin(bool skip) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keySkipJwxtLogin, skip);
+  }
+
+  /// 获取是否跳过教务系统登录
+  static Future<bool> getSkipJwxtLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keySkipJwxtLogin) ?? false;
   }
 
   /// 保存开学日期
@@ -785,6 +812,136 @@ class AuthStorage {
         .map((s) => int.tryParse(s) ?? 0)
         .where((t) => t > oneMinuteAgo)
         .length;
+  }
+
+  // ========== 已完成签退的活动管理 ==========
+
+  /// 标记活动签退已完成
+  static Future<void> markSignOutCompleted(String activityId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final completedIds = await getCompletedSignOutActivityIds();
+    if (!completedIds.contains(activityId)) {
+      completedIds.add(activityId);
+      await prefs.setStringList(_keyCompletedSignOutActivityIds, completedIds);
+    }
+    // 同时从签退活动缓存中移除
+    await removeSignOutActivityFromCache(activityId);
+  }
+
+  /// 取消标记活动签退完成
+  static Future<void> unmarkSignOutCompleted(String activityId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final completedIds = await getCompletedSignOutActivityIds();
+    completedIds.remove(activityId);
+    await prefs.setStringList(_keyCompletedSignOutActivityIds, completedIds);
+  }
+
+  /// 检查活动签退是否已完成
+  static Future<bool> isSignOutCompleted(String activityId) async {
+    final completedIds = await getCompletedSignOutActivityIds();
+    return completedIds.contains(activityId);
+  }
+
+  /// 获取所有已完成签退的活动ID列表
+  static Future<List<String>> getCompletedSignOutActivityIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyCompletedSignOutActivityIds) ?? [];
+  }
+
+  /// 清除所有已完成签退的活动记录（用于账号切换等场景）
+  static Future<void> clearCompletedSignOutActivities() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyCompletedSignOutActivityIds);
+  }
+
+  // ========== 有签退的活动ID缓存管理 ==========
+
+  /// 标记活动有签退（用于缓存检测结果，避免重复API调用）
+  static Future<void> markActivityHasSignOut(String activityId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = await getActivitiesWithSignOut();
+    if (!ids.contains(activityId)) {
+      ids.add(activityId);
+      await prefs.setStringList(_keyActivitiesWithSignOut, ids);
+    }
+  }
+
+  /// 获取所有已知有签退的活动ID列表
+  static Future<List<String>> getActivitiesWithSignOut() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyActivitiesWithSignOut) ?? [];
+  }
+
+  /// 检查活动是否已知有签退
+  static Future<bool> hasSignOutCached(String activityId) async {
+    final ids = await getActivitiesWithSignOut();
+    return ids.contains(activityId);
+  }
+
+  /// 清除有签退的活动缓存（用于账号切换等场景）
+  static Future<void> clearActivitiesWithSignOut() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyActivitiesWithSignOut);
+  }
+
+  /// 缓存有签退的活动详细信息
+  static Future<void> cacheSignOutActivity(
+    Map<String, dynamic> activityJson,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cachedActivities = await getSignOutActivitiesCache();
+
+    final activityId = activityJson['activeId'] as String?;
+    if (activityId == null) {
+      debugPrint('  [AuthStorage] 缓存失败: activityId为空');
+      return;
+    }
+
+    debugPrint(
+      '  [AuthStorage] 缓存签退活动: id=$activityId, '
+      'courseId=${activityJson['courseId']}, '
+      'classId=${activityJson['classId']}',
+    );
+
+    // 移除旧的同ID活动，添加新的
+    cachedActivities.removeWhere((a) => a['activeId'] == activityId);
+    cachedActivities.add(activityJson);
+
+    // 只保留最近100个活动，避免缓存过大
+    if (cachedActivities.length > 100) {
+      cachedActivities.removeRange(0, cachedActivities.length - 100);
+    }
+
+    final jsonStr = cachedActivities.map((a) => jsonEncode(a)).toList();
+    await prefs.setStringList(_keySignOutActivitiesCache, jsonStr);
+    debugPrint('  [AuthStorage] ✓ 缓存成功，总数: ${cachedActivities.length}');
+  }
+
+  /// 获取缓存的有签退活动列表
+  static Future<List<Map<String, dynamic>>> getSignOutActivitiesCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStrList = prefs.getStringList(_keySignOutActivitiesCache) ?? [];
+    final result = jsonStrList
+        .map((str) => jsonDecode(str) as Map<String, dynamic>)
+        .toList();
+    debugPrint('  [AuthStorage] 读取缓存: ${result.length} 个签退活动');
+    return result;
+  }
+
+  /// 从缓存中移除活动
+  static Future<void> removeSignOutActivityFromCache(String activityId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cachedActivities = await getSignOutActivitiesCache();
+    cachedActivities.removeWhere((a) => a['activeId'] == activityId);
+
+    final jsonStr = cachedActivities.map((a) => jsonEncode(a)).toList();
+    await prefs.setStringList(_keySignOutActivitiesCache, jsonStr);
+  }
+
+  /// 清除签退活动缓存
+  static Future<void> clearSignOutActivitiesCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keySignOutActivitiesCache);
   }
 }
 

@@ -17,7 +17,12 @@ import 'auth_storage.dart';
 class XxtService {
   static final XxtService _instance = XxtService._internal();
   factory XxtService() => _instance;
-  XxtService._internal();
+  XxtService._internal() {
+    // 配置全局超时
+    _dio.options.connectTimeout = const Duration(seconds: 10);
+    _dio.options.receiveTimeout = const Duration(seconds: 15);
+    _dio.options.sendTimeout = const Duration(seconds: 10);
+  }
 
   final Dio _dio = Dio();
 
@@ -80,11 +85,13 @@ class XxtService {
         final cookies = response.headers['set-cookie'];
         if (cookies != null && cookies.isNotEmpty) {
           _cookie = _parseCookies(cookies);
+          _isLoggedIn = true;
           debugPrint('学习通登录成功，Cookie: $_cookie');
           return true;
         } else {
           debugPrint('学习通登录成功但未获取到 Cookie');
           // 即使没有新 Cookie，登录也可能成功（使用现有会话）
+          _isLoggedIn = true;
           return true;
         }
       }
@@ -185,7 +192,6 @@ class XxtService {
         }
 
         // 解析剩余时间
-        // TODO
         String remainingTime = '未设置截止时间';
         if (ariaLabel.contains('时间剩余')) {
           // 匹配 "时间剩余" 后面的内容直到引号结束
@@ -341,10 +347,16 @@ class XxtService {
     }
   }
 
-  /// 清除登录状态
+  /// 清除登录会话（用于登出或账号切换）
+  /// 完全清除所有登录状态和缓存数据
   void clearSession() {
     _cookie = null;
+    _isLoggedIn = false;
   }
+
+  // 添加登录状态字段
+  bool _isLoggedIn = false;
+  bool get isLoggedIn => _isLoggedIn;
 
   // ========== 进行中活动相关方法 ==========
 
@@ -445,6 +457,56 @@ class XxtService {
     } catch (e) {
       debugPrint('获取活动结束时间失败: activeId=$activeId, $e');
       return null;
+    }
+  }
+
+  /// 检查签到活动是否有签退信息
+  Future<bool> _hasSignOutInfo(String activeId) async {
+    if (_cookie == null || _cookie!.isEmpty) return false;
+
+    try {
+      final url =
+          'https://mobilelearn.chaoxing.com/newsign/preSign?general=1&sys=1&ls=1&appType=15&isTeacherViewOpen=0'
+          '&activeId=$activeId';
+
+      final response = await _dio.get(
+        url,
+        options: Options(
+          headers: {
+            'Cookie': _cookie,
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          receiveTimeout: const Duration(seconds: 5),
+          followRedirects: false,
+          validateStatus: (status) => status != null && status < 400,
+        ),
+      );
+
+      final body = response.data?.toString() ?? '';
+
+      // 检查页面中是否包含签退相关信息
+      // signInId 或 signOutPublishTimeStamp 表示有签退
+      final hasSignIn = body.contains('signInId');
+      final hasSignOutTime = body.contains('signOutPublishTimeStamp');
+      final result = hasSignIn || hasSignOutTime;
+
+      debugPrint(
+        '检查签退信息: activeId=$activeId\n'
+        '  - 包含signInId: $hasSignIn\n'
+        '  - 包含signOutPublishTimeStamp: $hasSignOutTime\n'
+        '  - 结果: $result',
+      );
+
+      // 如果检测到有签退，缓存这个结果
+      if (result) {
+        await AuthStorage.markActivityHasSignOut(activeId);
+      }
+
+      return result;
+    } catch (e) {
+      debugPrint('检查签退信息失败: activeId=$activeId, $e');
+      return false;
     }
   }
 
@@ -697,38 +759,104 @@ class XxtService {
         return null;
       }
 
+      // 一次性获取所有已完成签退的活动ID列表，避免重复读取SharedPreferences
+      final completedSignOutIds =
+          await AuthStorage.getCompletedSignOutActivityIds();
+
+      // 一次性获取所有已知有签退的活动ID列表
+      final activitiesWithSignOut =
+          await AuthStorage.getActivitiesWithSignOut();
+
       // 获取结束时间和状态
       final enrichedActivities = <XxtActivity>[];
 
       for (final activity in activities) {
         if (activity.activeId != null) {
+          // 如果是签到活动且用户已标记签退完成，则提前跳过（性能优化）
+          if (activity.type == XxtActivityType.signIn &&
+              completedSignOutIds.contains(activity.activeId)) {
+            debugPrint('  跳过活动: ${activity.name} (用户已标记签退完成)');
+            continue;
+          }
+
+          // 先检查缓存，如果缓存中有记录说明有签退，直接使用缓存结果
+          final cachedHasSignOut =
+              activity.type == XxtActivityType.signIn &&
+              activitiesWithSignOut.contains(activity.activeId);
+
+          if (cachedHasSignOut) {
+            debugPrint(
+              '  使用缓存的签退信息: activeId=${activity.activeId} (${activity.name})',
+            );
+          }
+
           final futures = await Future.wait([
             _getActivityEndTime(activity.activeId!),
             if (activity.activeType != null)
               _checkActivityStatus(activity.activeId!, activity.activeType!)
             else
               Future.value(XxtActivityStatus.unknown),
+            // 对于签到活动，如果缓存中没有，才调用API检查
+            if (activity.type == XxtActivityType.signIn && !cachedHasSignOut)
+              _hasSignOutInfo(activity.activeId!)
+            else
+              Future.value(cachedHasSignOut),
           ]);
 
           final endTime = futures[0] as DateTime?;
           final status = futures.length > 1
               ? futures[1] as XxtActivityStatus
               : XxtActivityStatus.unknown;
+          final hasSignOut = futures.length > 2 ? futures[2] as bool : false;
 
           final enrichedActivity = activity.copyWith(
             endTime: endTime,
             status: status,
+            hasSignOut: hasSignOut,
+          );
+
+          // 如果检测到有签退，缓存活动详细信息（包含课程信息）
+          if (hasSignOut) {
+            final activityJson = enrichedActivity.toJson();
+            activityJson['courseId'] = courseId;
+            activityJson['classId'] = classId;
+            activityJson['courseName'] = course['name'];
+            await AuthStorage.cacheSignOutActivity(activityJson);
+          }
+
+          // 详细调试日志
+          debugPrint(
+            '  检查活动: ${activity.name}\n'
+            '    - activeId: ${activity.activeId}\n'
+            '    - type: ${enrichedActivity.type}\n'
+            '    - endTime: $endTime\n'
+            '    - status: ${enrichedActivity.status.displayName}\n'
+            '    - hasSignOut: $hasSignOut\n'
+            '    - isExpired: ${enrichedActivity.isExpired}\n'
+            '    - isCompleted: ${enrichedActivity.status.isCompleted}',
           );
 
           // 过滤掉已完成和已过期的活动
-          if (!enrichedActivity.status.isCompleted &&
-              !enrichedActivity.isExpired) {
+          // 重要：签到活动不在此处过滤，保留所有签到活动（参考 ChaoxingSignFaker 的做法）
+          // 原因：签退检测可能因API失败而返回false，导致有签退的活动被误过滤
+          final isSignInActivity =
+              enrichedActivity.type == XxtActivityType.signIn;
+
+          final shouldKeep =
+              isSignInActivity ||
+              (!enrichedActivity.isExpired &&
+                  !enrichedActivity.status.isCompleted);
+
+          debugPrint('    - shouldKeep: $shouldKeep');
+
+          if (shouldKeep) {
             enrichedActivities.add(enrichedActivity);
           } else {
             debugPrint(
               '  跳过活动: ${activity.name} '
               '(状态=${enrichedActivity.status.displayName}, '
-              '已过期=${enrichedActivity.isExpired})',
+              '已过期=${enrichedActivity.isExpired}, '
+              'hasSignOut=$hasSignOut)',
             );
           }
         } else {
@@ -739,6 +867,76 @@ class XxtService {
       if (enrichedActivities.isEmpty) {
         return null;
       }
+
+      // 从缓存中恢复有签退但不在当前列表中的签到活动
+      // 这解决了签到活动过期后从API消失，但用户还未完成签退的问题
+      final currentActivityIds = enrichedActivities
+          .where((a) => a.activeId != null)
+          .map((a) => a.activeId!)
+          .toSet();
+
+      debugPrint('  当前活动列表: $currentActivityIds');
+
+      final cachedActivities = await AuthStorage.getSignOutActivitiesCache();
+      debugPrint('  缓存中的签退活动数量: ${cachedActivities.length}');
+
+      for (final cachedJson in cachedActivities) {
+        try {
+          final cachedActivity = XxtActivity.fromJson(cachedJson);
+          final cachedId = cachedActivity.activeId;
+          final cachedCourseId = cachedJson['courseId'];
+          final cachedClassId = cachedJson['classId'];
+
+          debugPrint(
+            '  检查缓存活动: ${cachedActivity.name}\n'
+            '    - cachedId: $cachedId\n'
+            '    - hasSignOut: ${cachedActivity.hasSignOut}\n'
+            '    - inCurrentList: ${currentActivityIds.contains(cachedId)}\n'
+            '    - isCompleted: ${completedSignOutIds.contains(cachedId)}\n'
+            '    - type: ${cachedActivity.type}\n'
+            '    - courseId匹配: $cachedCourseId == $courseId\n'
+            '    - classId匹配: $cachedClassId == $classId',
+          );
+
+          // 只恢复当前课程的、不在当前列表中的、未确认完成签退的签到活动
+          if (cachedId != null &&
+              cachedActivity.hasSignOut &&
+              !currentActivityIds.contains(cachedId) &&
+              !completedSignOutIds.contains(cachedId) &&
+              cachedActivity.type == XxtActivityType.signIn &&
+              (cachedCourseId == courseId || cachedClassId == classId)) {
+            debugPrint(
+              '  ✓ 从缓存恢复活动: ${cachedActivity.name} (activeId=$cachedId)',
+            );
+            enrichedActivities.add(cachedActivity);
+          }
+        } catch (e) {
+          debugPrint('  恢复缓存活动失败: $e');
+        }
+      }
+
+      if (enrichedActivities.isEmpty) {
+        return null;
+      }
+
+      // 对活动进行排序：签到活动优先
+      enrichedActivities.sort((a, b) {
+        // 签到活动排在前面
+        final aIsSign = a.type == XxtActivityType.signIn;
+        final bIsSign = b.type == XxtActivityType.signIn;
+
+        if (aIsSign && !bIsSign) return -1;
+        if (!aIsSign && bIsSign) return 1;
+
+        // 相同类型按结束时间排序（早结束的在前）
+        if (a.endTime != null && b.endTime != null) {
+          return a.endTime!.compareTo(b.endTime!);
+        }
+        if (a.endTime != null) return -1;
+        if (b.endTime != null) return 1;
+
+        return 0;
+      });
 
       debugPrint('发现活动: ${course['name']} - ${enrichedActivities.length} 个');
       for (final act in enrichedActivities) {
@@ -754,8 +952,22 @@ class XxtService {
         classId: classId ?? '',
         activities: enrichedActivities,
       );
+    } on DioException catch (e) {
+      // 区分不同的网络错误
+      if (e.type == DioExceptionType.connectionTimeout) {
+        debugPrint('检查课程活动超时: ${course['name']} (连接超时)');
+      } else if (e.type == DioExceptionType.receiveTimeout) {
+        debugPrint('检查课程活动超时: ${course['name']} (接收超时)');
+      } else if (e.type == DioExceptionType.sendTimeout) {
+        debugPrint('检查课程活动超时: ${course['name']} (发送超时)');
+      } else if (e.type == DioExceptionType.connectionError) {
+        debugPrint('检查课程活动失败: ${course['name']} (网络错误)');
+      } else {
+        debugPrint('检查课程活动失败: ${course['name']}, ${e.type}');
+      }
+      return null;
     } catch (e) {
-      debugPrint('检查课程活动失败: ${course['name']}, $e');
+      debugPrint('检查课程活动异常: ${course['name']}, $e');
       return null;
     }
   }
@@ -853,28 +1065,150 @@ class XxtService {
 
       // 并发检查所有课程的活动
       final results = <XxtCourseActivities>[];
+      var successCount = 0;
+      var failCount = 0;
+      var timeoutCount = 0;
 
       // 使用 Future.wait 并发请求，但限制并发数
-      const batchSize = 10;
-      for (var i = 0; i < courses.length; i += batchSize) {
-        final batch = courses.skip(i).take(batchSize).toList();
-        final batchResults = await Future.wait(
-          batch.map((c) => _checkCourseActivities(c)),
-        );
+      // 减小批次大小以降低整体超时风险
+      const batchSize = 5;
+      final totalBatches = (courses.length / batchSize).ceil();
 
-        for (final result in batchResults) {
-          if (result != null) {
-            results.add(result);
+      for (var i = 0; i < courses.length; i += batchSize) {
+        final currentBatch = (i / batchSize).floor() + 1;
+        final batch = courses.skip(i).take(batchSize).toList();
+
+        debugPrint('批次 $currentBatch/$totalBatches: 检查 ${batch.length} 门课程...');
+
+        try {
+          // 为整个批次添加超时限制(每个课程最多10秒,批次最多60秒)
+          final batchResults =
+              await Future.wait(
+                batch.map((c) => _checkCourseActivities(c)),
+              ).timeout(
+                const Duration(seconds: 60),
+                onTimeout: () {
+                  debugPrint('批次 $currentBatch 超时,跳过剩余课程');
+                  timeoutCount += batch.length;
+                  return List.filled(batch.length, null);
+                },
+              );
+
+          for (final result in batchResults) {
+            if (result != null) {
+              results.add(result);
+              successCount++;
+            }
           }
+        } catch (e) {
+          debugPrint('批次 $currentBatch 失败: $e');
+          failCount += batch.length;
         }
       }
 
-      debugPrint('活动获取: 共发现 ${results.length} 门课程有活动');
+      debugPrint(
+        '活动获取完成: 成功=$successCount, 失败=$failCount, 超时=$timeoutCount, '
+        '共发现 ${results.length} 门课程有活动',
+      );
+
+      // 从缓存中恢复有签退但不在当前任何课程列表中的活动
+      await _restoreSignOutActivitiesFromCache(results);
+
       return XxtActivityResult.success(results);
     } catch (e, stackTrace) {
       debugPrint('获取进行中活动异常: $e');
       debugPrint('堆栈: $stackTrace');
       return XxtActivityResult.failure('获取失败: $e');
+    }
+  }
+
+  /// 从缓存中恢复签退活动到结果列表
+  Future<void> _restoreSignOutActivitiesFromCache(
+    List<XxtCourseActivities> results,
+  ) async {
+    try {
+      // 获取所有当前活动的ID
+      final currentActivityIds = <String>{};
+      for (final courseActivities in results) {
+        for (final activity in courseActivities.activities) {
+          if (activity.activeId != null) {
+            currentActivityIds.add(activity.activeId!);
+          }
+        }
+      }
+
+      // 获取已完成签退的活动ID
+      final completedSignOutIds =
+          await AuthStorage.getCompletedSignOutActivityIds();
+
+      // 获取缓存的签退活动
+      final cachedActivities = await AuthStorage.getSignOutActivitiesCache();
+      debugPrint('全局检查缓存: 共 ${cachedActivities.length} 个签退活动');
+
+      for (final cachedJson in cachedActivities) {
+        try {
+          final cachedActivity = XxtActivity.fromJson(cachedJson);
+          final cachedId = cachedActivity.activeId;
+          final cachedCourseId = cachedJson['courseId'] as String?;
+          final cachedClassId = cachedJson['classId'] as String?;
+          final cachedCourseName = cachedJson['courseName'] as String?;
+
+          debugPrint(
+            '  全局检查缓存活动: ${cachedActivity.name}\n'
+            '    - cachedId: $cachedId\n'
+            '    - hasSignOut: ${cachedActivity.hasSignOut}\n'
+            '    - inCurrentList: ${currentActivityIds.contains(cachedId)}\n'
+            '    - isCompleted: ${completedSignOutIds.contains(cachedId)}\n'
+            '    - courseId: $cachedCourseId\n'
+            '    - classId: $cachedClassId',
+          );
+
+          // 只恢复不在当前列表中的、未确认完成签退的签到活动
+          if (cachedId != null &&
+              cachedActivity.hasSignOut &&
+              !currentActivityIds.contains(cachedId) &&
+              !completedSignOutIds.contains(cachedId) &&
+              cachedActivity.type == XxtActivityType.signIn) {
+            debugPrint('  ✓ 全局恢复缓存活动: ${cachedActivity.name}');
+
+            // 查找对应的课程，如果不存在则创建
+            var courseActivities = results.firstWhere(
+              (c) => c.courseId == cachedCourseId || c.classId == cachedClassId,
+              orElse: () {
+                // 创建新的课程活动条目
+                final newCourse = XxtCourseActivities(
+                  courseName: cachedCourseName ?? '未知课程',
+                  courseId: cachedCourseId ?? '',
+                  classId: cachedClassId ?? '',
+                  activities: [],
+                );
+                results.add(newCourse);
+                return newCourse;
+              },
+            );
+
+            // 添加活动（需要创建新的对象，因为 activities 是 final）
+            final updatedActivities = List<XxtActivity>.from(
+              courseActivities.activities,
+            )..add(cachedActivity);
+
+            final updatedCourse = XxtCourseActivities(
+              courseName: courseActivities.courseName,
+              courseId: courseActivities.courseId,
+              classId: courseActivities.classId,
+              activities: updatedActivities,
+            );
+
+            // 替换原课程
+            final index = results.indexOf(courseActivities);
+            results[index] = updatedCourse;
+          }
+        } catch (e) {
+          debugPrint('  全局恢复缓存活动失败: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('全局恢复签退活动失败: $e');
     }
   }
 

@@ -30,9 +30,10 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
+  bool _skipJwxtLogin = false;
 
-  // 导航项
-  static const _navigationItems = [
+  // 完整的导航项（包括成绩）
+  static const _allNavigationItems = [
     NavigationDestination(
       icon: Icon(Icons.home_outlined),
       selectedIcon: Icon(Icons.home),
@@ -60,18 +61,56 @@ class _MainShellState extends State<MainShell> {
     ),
   ];
 
+  // 学习通模式的导航项（不包括成绩）
+  static const _xxtNavigationItems = [
+    NavigationDestination(
+      icon: Icon(Icons.home_outlined),
+      selectedIcon: Icon(Icons.home),
+      label: '首页',
+    ),
+    NavigationDestination(
+      icon: Icon(Icons.calendar_month_outlined),
+      selectedIcon: Icon(Icons.calendar_month),
+      label: '课程表',
+    ),
+    NavigationDestination(
+      icon: Icon(Icons.menu_book_outlined),
+      selectedIcon: Icon(Icons.menu_book),
+      label: '学习',
+    ),
+    NavigationDestination(
+      icon: Icon(Icons.person_outline),
+      selectedIcon: Icon(Icons.person),
+      label: '我的',
+    ),
+  ];
+
   @override
   void initState() {
     super.initState();
+    _loadSkipJwxtStatus();
     // 初始化数据加载
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.dataManager.initialize();
     });
   }
 
+  Future<void> _loadSkipJwxtStatus() async {
+    final skipJwxt = await AuthStorage.getSkipJwxtLogin();
+    if (mounted) {
+      setState(() {
+        _skipJwxtLogin = skipJwxt;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    // 根据学习通模式选择导航项
+    final navigationItems = _skipJwxtLogin
+        ? _xxtNavigationItems
+        : _allNavigationItems;
 
     return ListenableBuilder(
       listenable: widget.dataManager,
@@ -102,7 +141,7 @@ class _MainShellState extends State<MainShell> {
                 _currentIndex = index;
               });
             },
-            destinations: _navigationItems,
+            destinations: navigationItems,
             backgroundColor: colorScheme.surface,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
@@ -114,36 +153,69 @@ class _MainShellState extends State<MainShell> {
   }
 
   Widget _buildPage() {
-    switch (_currentIndex) {
-      case 0:
-        return HomeScreen(
-          key: const ValueKey('home'),
-          dataManager: widget.dataManager,
-        );
-      case 1:
-        return ScheduleScreen(
-          key: const ValueKey('schedule'),
-          dataManager: widget.dataManager,
-        );
-      case 2:
-        return const StudyScreen(key: ValueKey('study'));
-      case 3:
-        return GradesScreen(
-          key: const ValueKey('grades'),
-          dataManager: widget.dataManager,
-        );
-      case 4:
-        return ProfileScreen(
-          key: const ValueKey('profile'),
-          dataManager: widget.dataManager,
-          onLogout: widget.onLogout,
-          onSwitchAccount: widget.onSwitchAccount,
-        );
-      default:
-        return HomeScreen(
-          key: const ValueKey('home'),
-          dataManager: widget.dataManager,
-        );
+    // 学习通模式下的页面索引映射：0=首页 1=课程表 2=学习 3=我的
+    // 完整模式下的页面索引映射：0=首页 1=课程表 2=学习 3=成绩 4=我的
+    if (_skipJwxtLogin) {
+      // 学习通模式：跳过成绩页面
+      switch (_currentIndex) {
+        case 0:
+          return HomeScreen(
+            key: const ValueKey('home'),
+            dataManager: widget.dataManager,
+          );
+        case 1:
+          return ScheduleScreen(
+            key: const ValueKey('schedule'),
+            dataManager: widget.dataManager,
+          );
+        case 2:
+          return const StudyScreen(key: ValueKey('study'));
+        case 3:
+          return ProfileScreen(
+            key: const ValueKey('profile'),
+            dataManager: widget.dataManager,
+            onLogout: widget.onLogout,
+            onSwitchAccount: widget.onSwitchAccount,
+          );
+        default:
+          return HomeScreen(
+            key: const ValueKey('home'),
+            dataManager: widget.dataManager,
+          );
+      }
+    } else {
+      // 完整模式：包含所有页面
+      switch (_currentIndex) {
+        case 0:
+          return HomeScreen(
+            key: const ValueKey('home'),
+            dataManager: widget.dataManager,
+          );
+        case 1:
+          return ScheduleScreen(
+            key: const ValueKey('schedule'),
+            dataManager: widget.dataManager,
+          );
+        case 2:
+          return const StudyScreen(key: ValueKey('study'));
+        case 3:
+          return GradesScreen(
+            key: const ValueKey('grades'),
+            dataManager: widget.dataManager,
+          );
+        case 4:
+          return ProfileScreen(
+            key: const ValueKey('profile'),
+            dataManager: widget.dataManager,
+            onLogout: widget.onLogout,
+            onSwitchAccount: widget.onSwitchAccount,
+          );
+        default:
+          return HomeScreen(
+            key: const ValueKey('home'),
+            dataManager: widget.dataManager,
+          );
+      }
     }
   }
 }

@@ -94,12 +94,27 @@ class XxtSignOutInfo {
       // 当前是签退活动
       return XxtSignRedirectStatus.signOut;
     } else if (signOutPublishTime != null) {
-      if (signOutId == null) {
-        // 签退未发布
-        return XxtSignRedirectStatus.signInUnpublished;
+      // 检查签退是否已到发布时间
+      // 注意：即使签退发布时间晚于签到结束时间，只要签退已发布就允许签退
+      final now = DateTime.now();
+
+      // 如果签退ID已存在，说明签退活动已创建
+      if (signOutId != null) {
+        // 检查是否已到发布时间（如果设置了发布时间）
+        final isPublishTimeReached =
+            now.isAfter(signOutPublishTime!) ||
+            now.isAtSameMomentAs(signOutPublishTime!);
+
+        if (isPublishTimeReached) {
+          // 签退已发布且已到发布时间
+          return XxtSignRedirectStatus.signInPublished;
+        } else {
+          // 签退已创建但未到发布时间
+          return XxtSignRedirectStatus.signInUnpublished;
+        }
       } else {
-        // 签退已发布
-        return XxtSignRedirectStatus.signInPublished;
+        // 签退活动尚未创建
+        return XxtSignRedirectStatus.signInUnpublished;
       }
     }
     return XxtSignRedirectStatus.common;
@@ -199,7 +214,19 @@ class XxtSignActivity {
   });
 
   /// 是否已过期
-  bool get isExpired => endTime != null && DateTime.now().isAfter(endTime!);
+  /// 对于有签退的签到活动，永不自动过期（需要用户手动确认）
+  bool get isExpired {
+    final now = DateTime.now();
+
+    // 如果有签退信息（无论是主签到还是签退活动），永不自动过期
+    // 用户需要在签到页面手动确认已完成签退，才会从列表中移除
+    if (signOutInfo != null) {
+      return false;
+    }
+
+    // 普通签到活动，按正常逻辑判断
+    return endTime != null && now.isAfter(endTime!);
+  }
 
   /// 获取剩余时间描述
   String get remainingTimeText {

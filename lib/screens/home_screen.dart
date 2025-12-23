@@ -87,6 +87,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   // 未交作业相关
   List<XxtWork> _allWorks = []; // 所有未交作业（按截止时间排序）
+  List<XxtCourseActivities> _allActivities = []; // 所有进行中的活动
   bool _isLoadingWorks = false;
   bool _xxtNotConfigured = false; // 学习通未配置
   PageController? _workPageController;
@@ -109,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen>
     _checkCityAndLoadWeather();
     _loadTimetable();
     _checkForUpdate();
-    _loadUrgentWorks(); // 加载即将截止的作业
+    _loadWorksAndActivities(); // 加载作业和活动
   }
 
   @override
@@ -205,13 +206,6 @@ class _HomeScreenState extends State<HomeScreen>
     });
     // 异步保存状态
     _saveNotificationState();
-  }
-
-  /// 清除更新通知（更新完成后调用）
-  void _clearUpdateNotification() {
-    setState(() {
-      _updateInfo = null;
-    });
   }
 
   /// 获取即将开始的课程通知
@@ -371,7 +365,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
     } catch (e) {
-      ('加载天气失败: $e');
+      debugPrint('加载天气失败: $e');
       if (mounted) {
         setState(() {
           _weather = WeatherInfo.defaultWeather();
@@ -519,8 +513,8 @@ class _HomeScreenState extends State<HomeScreen>
     return courses.length - 1;
   }
 
-  /// 加载所有未交作业（按截止时间排序）
-  Future<void> _loadUrgentWorks() async {
+  /// 加载所有未交作业和进行中的活动（合并显示）
+  Future<void> _loadWorksAndActivities() async {
     if (_isLoadingWorks) return;
 
     setState(() {
@@ -530,59 +524,191 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       final xxtService = XxtService();
-      final result = await xxtService.getUnfinishedWorks();
+
+      // 优先加载签到活动（独立加载，不受其他活动影响）
+      final signActivitiesResult = await xxtService.getOngoingActivities();
+
+      // 提取签到活动
+      final signActivities = <XxtCourseActivities>[];
+      if (signActivitiesResult.success) {
+        for (final courseActivities in signActivitiesResult.courseActivities) {
+          final signOnly = courseActivities.activities
+              .where((a) => a.type == XxtActivityType.signIn)
+              .toList();
+          if (signOnly.isNotEmpty) {
+            signActivities.add(
+              XxtCourseActivities(
+                courseName: courseActivities.courseName,
+                courseId: courseActivities.courseId,
+                classId: courseActivities.classId,
+                activities: signOnly,
+              ),
+            );
+          }
+        }
+      }
+
+      // 先更新签到活动，让用户立即看到
+      if (mounted && signActivities.isNotEmpty) {
+        setState(() {
+          _allActivities = signActivities;
+        });
+        // 安排签到活动提醒通知
+        _scheduleActivityNotifications(signActivities);
+      }
+
+      // 然后加载作业和其他活动
+      final results = await Future.wait<dynamic>([
+        xxtService.getUnfinishedWorks(),
+        Future.value(signActivitiesResult), // 复用已加载的活动结果
+      ]);
+
+      final worksResult = results[0] as XxtWorkResult;
+      final activitiesResult = results[1] as XxtActivityResult;
 
       // 更新作业小组件
-      if (result.success) {
+      if (worksResult.success) {
         await WidgetService.updateWorksWidget(
-          works: result.works,
+          works: worksResult.works,
           needLogin: false,
         );
-      } else if (result.needLogin) {
+      } else if (worksResult.needLogin) {
         await WidgetService.updateWorksWidgetNeedLogin();
       }
 
-      if (mounted && result.success) {
-        // 获取所有未超时的作业
-        final works = result.works.where((w) => !w.isOverdue).toList();
+      if (mounted) {
+        if (worksResult.success || activitiesResult.success) {
+          // 获取所有未超时的作业
+          final works = worksResult.success
+              ? worksResult.works.where((w) => !w.isOverdue).toList()
+              : <XxtWork>[];
 
-        // 按截止时间排序（最近截止的排在前面）
-        works.sort((a, b) {
-          final aMinutes = _parseRemainingTimeToMinutes(a.remainingTime);
-          final bMinutes = _parseRemainingTimeToMinutes(b.remainingTime);
-          return aMinutes.compareTo(bMinutes);
-        });
+          // 按截止时间排序（最近截止的排在前面）
+          works.sort((a, b) {
+            final aMinutes = _parseRemainingTimeToMinutes(a.remainingTime);
+            final bMinutes = _parseRemainingTimeToMinutes(b.remainingTime);
+            return aMinutes.compareTo(bMinutes);
+          });
 
-        setState(() {
-          _allWorks = works;
-          _isLoadingWorks = false;
-          _xxtNotConfigured = false;
-          // 重置 PageController 索引
-          _currentWorkIndex = 0;
-        });
+          setState(() {
+            _allWorks = works;
+            _allActivities = activitiesResult.success
+                ? activitiesResult.courseActivities
+                : [];
+            _isLoadingWorks = false;
+            _xxtNotConfigured = false;
+            _currentWorkIndex = 0;
+          });
 
-        // 安排作业提醒通知
-        _scheduleWorkNotifications(result.works);
-      } else if (mounted && result.needLogin) {
-        // 学习通未配置
-        setState(() {
-          _isLoadingWorks = false;
-          _xxtNotConfigured = true;
-          _allWorks = [];
-        });
-      } else {
-        setState(() {
-          _isLoadingWorks = false;
-        });
+          // 安排作业提醒通知
+          if (worksResult.success) {
+            _scheduleWorkNotifications(worksResult.works);
+          }
+
+          // 安排活动提醒通知
+          if (activitiesResult.success) {
+            _scheduleActivityNotifications(activitiesResult.courseActivities);
+          }
+        } else if (worksResult.needLogin || activitiesResult.needLogin) {
+          // 学习通未配置
+          setState(() {
+            _isLoadingWorks = false;
+            _xxtNotConfigured = true;
+            _allWorks = [];
+            _allActivities = [];
+          });
+        } else {
+          setState(() {
+            _isLoadingWorks = false;
+            _allWorks = [];
+            _allActivities = [];
+          });
+        }
       }
     } catch (e) {
-      debugPrint('加载作业失败: $e');
+      debugPrint('加载作业和活动失败: $e');
       if (mounted) {
         setState(() {
           _isLoadingWorks = false;
         });
       }
     }
+  }
+
+  /// 为活动安排通知
+  Future<void> _scheduleActivityNotifications(
+    List<XxtCourseActivities> courseActivities,
+  ) async {
+    final notificationService = NotificationService();
+    await notificationService.initialize();
+
+    final hasPermission = await notificationService.checkPermission();
+    if (!hasPermission) return;
+
+    final activitiesForNotification = <Map<String, dynamic>>[];
+
+    for (final course in courseActivities) {
+      for (final activity in course.activities) {
+        if (activity.endTime != null && activity.status.isPending) {
+          activitiesForNotification.add({
+            'name': activity.name,
+            'courseName': course.courseName,
+            'type': activity.type.displayName,
+            'endTime': activity.endTime!,
+            'id': activity.activeId,
+          });
+        }
+      }
+    }
+
+    if (activitiesForNotification.isNotEmpty) {
+      await notificationService.scheduleActivitiesNotifications(
+        activities: activitiesForNotification,
+      );
+    }
+  }
+
+  /// 合并作业和活动为统一的任务列表
+  List<Map<String, dynamic>> _buildCombinedTaskList() {
+    final allItems = <Map<String, dynamic>>[];
+
+    // 添加作业
+    for (final work in _allWorks) {
+      allItems.add({
+        'type': 'work',
+        'data': work,
+        'deadline': _parseDeadline(work.remainingTime),
+      });
+    }
+
+    // 添加活动（显示未完成的活动，或者需要签退的活动）
+    for (final course in _allActivities) {
+      for (final activity in course.activities) {
+        // 显示条件：未完成 或 已完成但需要签退
+        final shouldShow = !activity.status.isCompleted ||
+            (activity.status.isCompleted && activity.hasSignOut);
+        if (shouldShow) {
+          allItems.add({
+            'type': 'activity',
+            'data': activity,
+            'course': course,
+            'deadline': activity.endTime,
+          });
+        }
+      }
+    }
+
+    // 按截止时间排序
+    allItems.sort((a, b) {
+      final aDeadline = a['deadline'] as DateTime?;
+      final bDeadline = b['deadline'] as DateTime?;
+      if (aDeadline == null && bDeadline == null) return 0;
+      if (aDeadline == null) return 1;
+      if (bDeadline == null) return -1;
+      return aDeadline.compareTo(bDeadline);
+    });
+
+    return allItems;
   }
 
   /// 将剩余时间字符串解析为分钟数（用于排序）
@@ -731,111 +857,137 @@ class _HomeScreenState extends State<HomeScreen>
         final todayCourses =
             schedule?.getCoursesForDay(currentWeek, weekday) ?? [];
 
-        return Scaffold(
-          body: RefreshIndicator(
-            onRefresh: () =>
-                widget.dataManager.loadSchedule(forceRefresh: true),
-            child: CustomScrollView(
-              slivers: [
-                // 顶部区域
-                SliverAppBar(
-                  expandedHeight: 90,
-                  pinned: true,
-                  backgroundColor: colorScheme.surface,
-                  flexibleSpace: FlexibleSpaceBar(
-                    title: Text(
-                      '今天',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        color: colorScheme.onSurface,
-                        fontWeight: FontWeight.bold,
+        return FutureBuilder<bool>(
+          future: AuthStorage.getSkipJwxtLogin(),
+          builder: (context, skipSnapshot) {
+            final skipJwxtLogin = skipSnapshot.data ?? false;
+            // 学习通模式下，如果没有课表数据，不应该显示错误状态
+            final shouldShowError =
+                hasError && !(skipJwxtLogin && schedule == null);
+
+            return Scaffold(
+              body: RefreshIndicator(
+                onRefresh: () async {
+                  await Future.wait([
+                    widget.dataManager.loadSchedule(forceRefresh: true),
+                    _loadWorksAndActivities(),
+                  ]);
+                },
+                child: CustomScrollView(
+                  slivers: [
+                    // 顶部区域
+                    SliverAppBar(
+                      expandedHeight: 90,
+                      pinned: true,
+                      backgroundColor: colorScheme.surface,
+                      flexibleSpace: FlexibleSpaceBar(
+                        title: Text(
+                          '今天',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            color: colorScheme.onSurface,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        titlePadding: const EdgeInsets.only(
+                          left: 20,
+                          bottom: 14,
+                        ),
                       ),
+                      actions: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: IconButton(
+                            icon: const Icon(Icons.refresh),
+                            onPressed: isLoading
+                                ? null
+                                : () => widget.dataManager.loadSchedule(
+                                    forceRefresh: true,
+                                  ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: _buildNotificationButton(colorScheme),
+                        ),
+                      ],
                     ),
-                    titlePadding: const EdgeInsets.only(left: 20, bottom: 14),
-                  ),
-                  actions: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: IconButton(
-                        icon: const Icon(Icons.refresh),
-                        onPressed: isLoading
-                            ? null
-                            : () => widget.dataManager.loadSchedule(
-                                forceRefresh: true,
+
+                    // 内容区域
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      sliver: SliverList(
+                        delegate: SliverChildListDelegate([
+                          // 日期和周次信息
+                          _buildDateHeader(
+                            theme,
+                            colorScheme,
+                            now,
+                            currentWeek,
+                          ),
+                          const SizedBox(height: 14),
+
+                          // 天气卡片
+                          _buildWeatherCard(theme, colorScheme),
+                          const SizedBox(height: 14),
+
+                          // 今日课程标题
+                          _buildSectionTitle(
+                            theme,
+                            '今日课程',
+                            isLoading ? 0 : todayCourses.length,
+                          ),
+                          const SizedBox(height: 10),
+
+                          // 加载状态
+                          if (isLoading) _buildLoadingState(colorScheme),
+
+                          // 错误状态（学习通模式下且无课表时不显示）
+                          if (shouldShowError && !isLoading)
+                            _buildErrorState(theme, colorScheme),
+
+                          // 课程卡片滑动区域或空状态
+                          if (!isLoading && !shouldShowError)
+                            if (todayCourses.isEmpty)
+                              _buildEmptyCoursesCard(
+                                theme,
+                                colorScheme,
+                                skipJwxtLogin: skipJwxtLogin,
+                              )
+                            else if (_areAllCoursesFinished(todayCourses))
+                              _buildEmptyCoursesCard(
+                                theme,
+                                colorScheme,
+                                allFinished: true,
+                              )
+                            else
+                              _buildCourseCarousel(
+                                theme,
+                                colorScheme,
+                                todayCourses,
                               ),
+
+                          const SizedBox(height: 14),
+
+                          // 学习任务卡片（包含作业和活动）
+                          _buildWorkDeadlineCard(theme, colorScheme),
+
+                          const SizedBox(height: 14),
+
+                          // 快捷操作区域（签到按钮）
+                          _buildQuickActions(theme, colorScheme),
+
+                          const SizedBox(height: 80), // 底部留白
+                        ]),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: _buildNotificationButton(colorScheme),
                     ),
                   ],
                 ),
-
-                // 内容区域
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  sliver: SliverList(
-                    delegate: SliverChildListDelegate([
-                      // 日期和周次信息
-                      _buildDateHeader(theme, colorScheme, now, currentWeek),
-                      const SizedBox(height: 14),
-
-                      // 天气卡片
-                      _buildWeatherCard(theme, colorScheme),
-                      const SizedBox(height: 14),
-
-                      // 今日课程标题
-                      _buildSectionTitle(
-                        theme,
-                        '今日课程',
-                        isLoading ? 0 : todayCourses.length,
-                      ),
-                      const SizedBox(height: 10),
-
-                      // 加载状态
-                      if (isLoading) _buildLoadingState(colorScheme),
-
-                      // 错误状态
-                      if (hasError && !isLoading)
-                        _buildErrorState(theme, colorScheme),
-
-                      // 课程卡片滑动区域或空状态
-                      if (!isLoading && !hasError)
-                        if (todayCourses.isEmpty)
-                          _buildEmptyCoursesCard(theme, colorScheme)
-                        else if (_areAllCoursesFinished(todayCourses))
-                          _buildEmptyCoursesCard(
-                            theme,
-                            colorScheme,
-                            allFinished: true,
-                          )
-                        else
-                          _buildCourseCarousel(
-                            theme,
-                            colorScheme,
-                            todayCourses,
-                          ),
-
-                      const SizedBox(height: 14),
-
-                      // 作业截止卡片（常驻显示）
-                      _buildWorkDeadlineCard(theme, colorScheme),
-
-                      const SizedBox(height: 14),
-
-                      // 快捷操作区域（签到按钮）
-                      _buildQuickActions(theme, colorScheme),
-
-                      const SizedBox(height: 80), // 底部留白
-                    ]),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -1641,11 +1793,7 @@ class _HomeScreenState extends State<HomeScreen>
                     color: colorScheme.error.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    icon,
-                    size: 24,
-                    color: colorScheme.error,
-                  ),
+                  child: Icon(icon, size: 24, color: colorScheme.error),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1830,7 +1978,7 @@ class _HomeScreenState extends State<HomeScreen>
                           icon: Icons.visibility_rounded,
                           label: '能见度',
                           value:
-                          // TODO
+                              // TODO
                               weather.visibilityDesc,
                           colorScheme: colorScheme,
                         ),
@@ -2050,7 +2198,7 @@ class _HomeScreenState extends State<HomeScreen>
       MaterialPageRoute(builder: (context) => const AccountManageScreen()),
     ).then((_) {
       // 返回后刷新作业数据
-      _loadUrgentWorks();
+      _loadWorksAndActivities();
     });
   }
 
@@ -2293,39 +2441,126 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildErrorState(ThemeData theme, ColorScheme colorScheme) {
-    return Card(
-      elevation: 0,
-      color: colorScheme.errorContainer.withValues(alpha: 0.5),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            Icon(Icons.error_outline, size: 48, color: colorScheme.error),
-            const SizedBox(height: 12),
-            Text(
-              '加载失败',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: colorScheme.error,
+    return FutureBuilder<bool>(
+      future: AuthStorage.getSkipJwxtLogin(),
+      builder: (context, snapshot) {
+        final skipJwxtLogin = snapshot.data ?? false;
+
+        if (skipJwxtLogin) {
+          // 学习通模式 - 显示友好的提示
+          return Card(
+            elevation: 0,
+            color: colorScheme.surfaceContainerLow,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer.withValues(
+                        alpha: 0.5,
+                      ),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.school_outlined,
+                      size: 48,
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '暂无课程表',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '添加教务系统账号或导入课表后可查看',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _openAccountManageScreen,
+                        icon: const Icon(Icons.add_rounded, size: 18),
+                        label: const Text('添加账号'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () => _importSchedule(),
+                        icon: const Icon(Icons.file_upload_rounded, size: 18),
+                        label: const Text('导入课表'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              widget.dataManager.errorMessage ?? '请检查网络连接',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onErrorContainer,
+          );
+        } else {
+          // 正常模式 - 显示错误信息
+          return Card(
+            elevation: 0,
+            color: colorScheme.errorContainer.withValues(alpha: 0.5),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Icon(Icons.error_outline, size: 48, color: colorScheme.error),
+                  const SizedBox(height: 12),
+                  Text(
+                    '加载失败',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.dataManager.errorMessage ?? '请检查网络连接',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onErrorContainer,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.tonal(
+                    onPressed: () =>
+                        widget.dataManager.loadSchedule(forceRefresh: true),
+                    child: const Text('重试'),
+                  ),
+                ],
               ),
-              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: () =>
-                  widget.dataManager.loadSchedule(forceRefresh: true),
-              child: const Text('重试'),
-            ),
-          ],
-        ),
-      ),
+          );
+        }
+      },
     );
   }
 
@@ -2359,7 +2594,82 @@ class _HomeScreenState extends State<HomeScreen>
     ThemeData theme,
     ColorScheme colorScheme, {
     bool allFinished = false,
+    bool skipJwxtLogin = false,
   }) {
+    // 学习通模式下且没有课程数据，显示导入提示
+    if (skipJwxtLogin && !allFinished) {
+      return Card(
+        elevation: 0,
+        color: colorScheme.surfaceContainerLow,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.school_outlined,
+                  size: 48,
+                  color: colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '暂无课程表',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '添加教务系统账号或导入课表后可查看',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _openAccountManageScreen,
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('添加账号'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                    ),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _importSchedule(),
+                    icon: const Icon(Icons.file_upload_rounded, size: 18),
+                    label: const Text('导入课表'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 正常情况：今天没课或课程已结束
     return Card(
       elevation: 0,
       color: colorScheme.surfaceContainerLow,
@@ -2533,12 +2843,12 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildCourseCard(
-      ThemeData theme,
-      ColorScheme colorScheme,
-      Course course,
-      int index,
-      int totalCourses,
-      ) {
+    ThemeData theme,
+    ColorScheme colorScheme,
+    Course course,
+    int index,
+    int totalCourses,
+  ) {
     // 使用与课程表页面一致的颜色
     final color = CourseColors.getColor(course.name);
 
@@ -2879,6 +3189,44 @@ class _HomeScreenState extends State<HomeScreen>
     return now.isAfter(startTime) && now.isBefore(endTime);
   }
 
+  /// 导入课表
+  Future<void> _importSchedule() async {
+    try {
+      final schedule =
+          await ScheduleImportExportService.showImportOptionsDialog(context);
+
+      if (schedule != null) {
+        // 保存导入的课表
+        final success = await ScheduleImportExportService.saveImportedSchedule(
+          schedule,
+        );
+
+        if (success) {
+          // 刷新数据管理器以加载新课表
+          await widget.dataManager.loadSchedule(forceRefresh: true);
+
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('课表导入成功')));
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('保存课表失败')));
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导入失败: $e')));
+      }
+    }
+  }
+
   void _showCourseDetail(Course course) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -3015,7 +3363,8 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// 构建作业截止卡片（常驻显示，支持左右滑动）
+  /// 构建学习通活动卡片（显示进行中的活动）
+  /// 构建作业截止卡片（包含作业和活动，支持左右滑动）
   Widget _buildWorkDeadlineCard(ThemeData theme, ColorScheme colorScheme) {
     // 加载中状态
     if (_isLoadingWorks) {
@@ -3037,7 +3386,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
               const SizedBox(width: 12),
               Text(
-                '正在加载作业...',
+                '正在加载学习任务...',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -3085,7 +3434,7 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                       Text(
-                        '配置后可获取作业信息',
+                        '配置后可获取作业和活动信息',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -3105,8 +3454,11 @@ class _HomeScreenState extends State<HomeScreen>
       );
     }
 
-    // 无作业状态
-    if (_allWorks.isEmpty) {
+    // 合并活动和作业
+    final allItems = _buildCombinedTaskList();
+
+    // 无任务状态
+    if (allItems.isEmpty) {
       return Card(
         elevation: 0,
         color: colorScheme.surfaceContainerLow,
@@ -3136,13 +3488,13 @@ class _HomeScreenState extends State<HomeScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '暂无待交作业',
+                        '暂无学习任务',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Text(
-                        '点击查看全部作业',
+                        '没有待交作业和进行中的活动',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -3166,8 +3518,8 @@ class _HomeScreenState extends State<HomeScreen>
     _workPageController ??= PageController(initialPage: 0);
 
     // 确保索引在有效范围内
-    if (_currentWorkIndex >= _allWorks.length) {
-      _currentWorkIndex = _allWorks.length - 1;
+    if (_currentWorkIndex >= allItems.length) {
+      _currentWorkIndex = allItems.length - 1;
     }
     if (_currentWorkIndex < 0) {
       _currentWorkIndex = 0;
@@ -3180,7 +3532,7 @@ class _HomeScreenState extends State<HomeScreen>
         Row(
           children: [
             Text(
-              '作业情况',
+              '学习任务',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
@@ -3193,7 +3545,7 @@ class _HomeScreenState extends State<HomeScreen>
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                '${_allWorks.length}',
+                '${allItems.length}',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: colorScheme.primary,
                   fontWeight: FontWeight.w600,
@@ -3203,12 +3555,12 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
         const SizedBox(height: 8),
-        // 作业卡片滑动区域
+        // 任务卡片滑动区域
         SizedBox(
           height: 90,
           child: PageView.builder(
             controller: _workPageController,
-            itemCount: _allWorks.length,
+            itemCount: allItems.length,
             physics: const PageScrollPhysics(parent: ClampingScrollPhysics()),
             onPageChanged: (index) {
               if (mounted && _currentWorkIndex != index) {
@@ -3218,16 +3570,22 @@ class _HomeScreenState extends State<HomeScreen>
               }
             },
             itemBuilder: (context, index) {
-              final work = _allWorks[index];
+              final item = allItems[index];
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: _buildWorkCard(theme, colorScheme, work, index),
+                child: _buildTaskCard(
+                  theme,
+                  colorScheme,
+                  item,
+                  index,
+                  allItems.length,
+                ),
               );
             },
           ),
         ),
         // 页面指示器（仅多于1项时显示）
-        if (_allWorks.length > 1) ...[
+        if (allItems.length > 1) ...[
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -3241,14 +3599,14 @@ class _HomeScreenState extends State<HomeScreen>
               ),
               const SizedBox(width: 4),
               // 指示点（最多显示5个）
-              ...List.generate(_allWorks.length > 5 ? 5 : _allWorks.length, (
+              ...List.generate(allItems.length > 5 ? 5 : allItems.length, (
                 index,
               ) {
-                final actualIndex = _allWorks.length > 5
+                final actualIndex = allItems.length > 5
                     ? _getVisibleDotIndex(
                         index,
                         _currentWorkIndex,
-                        _allWorks.length,
+                        allItems.length,
                       )
                     : index;
                 final isActive = actualIndex == _currentWorkIndex;
@@ -3290,6 +3648,304 @@ class _HomeScreenState extends State<HomeScreen>
     if (windowStart > totalCount - 5) windowStart = totalCount - 5;
 
     return windowStart + dotIndex;
+  }
+
+  /// 构建统一的任务卡片（支持作业和活动）
+  Widget _buildTaskCard(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    Map<String, dynamic> item,
+    int index,
+    int totalCount,
+  ) {
+    final type = item['type'] as String;
+
+    if (type == 'work') {
+      final work = item['data'] as XxtWork;
+      return _buildWorkCardInternal(
+        theme,
+        colorScheme,
+        work,
+        index,
+        totalCount,
+      );
+    } else {
+      final activity = item['data'] as XxtActivity;
+      final course = item['course'] as XxtCourseActivities;
+      return _buildActivityCardInternal(
+        theme,
+        colorScheme,
+        activity,
+        course,
+        index,
+        totalCount,
+      );
+    }
+  }
+
+  /// 构建作业卡片（内部方法）
+  Widget _buildWorkCardInternal(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    XxtWork work,
+    int index,
+    int totalCount,
+  ) {
+    final isUrgent = work.isUrgent;
+    final cardColor = isUrgent
+        ? colorScheme.errorContainer.withValues(alpha: 0.3)
+        : colorScheme.surfaceContainerLow;
+    final accentColor = isUrgent ? colorScheme.error : const Color(0xFFFF9800);
+
+    return Card(
+      elevation: 0,
+      color: cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isUrgent
+              ? colorScheme.error.withValues(alpha: 0.3)
+              : colorScheme.outlineVariant.withValues(alpha: 0.3),
+          width: 0.5,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _openXxtWorkScreen,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isUrgent
+                      ? Icons.warning_amber_rounded
+                      : Icons.assignment_outlined,
+                  size: 22,
+                  color: accentColor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      work.name,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      work.courseName ?? '未知课程',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: accentColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      work.remainingTime,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: accentColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (totalCount > 1) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '${index + 1}/$totalCount',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 构建活动卡片（内部方法）
+  Widget _buildActivityCardInternal(
+    ThemeData theme,
+    ColorScheme colorScheme,
+    XxtActivity activity,
+    XxtCourseActivities course,
+    int index,
+    int totalCount,
+  ) {
+    // 根据活动类型选择颜色
+    Color accentColor;
+    IconData icon;
+    switch (activity.type) {
+      case XxtActivityType.signIn:
+        accentColor = const Color(0xFF2196F3);
+        icon = Icons.location_on_rounded;
+        break;
+      case XxtActivityType.quiz:
+        accentColor = const Color(0xFFFF9800);
+        icon = Icons.quiz_rounded;
+        break;
+      case XxtActivityType.groupTask:
+        accentColor = const Color(0xFF9C27B0);
+        icon = Icons.group_rounded;
+        break;
+      default:
+        accentColor = const Color(0xFF4CAF50);
+        icon = Icons.assignment_rounded;
+    }
+
+    // 计算剩余时间
+    String remainingTimeText = '未知';
+    bool isUrgent = false;
+    if (activity.endTime != null) {
+      final remaining = activity.endTime!.difference(DateTime.now());
+      isUrgent = remaining.inMinutes < 30 && remaining.inMinutes > 0;
+      if (remaining.isNegative) {
+        remainingTimeText = '已结束';
+      } else if (remaining.inDays > 0) {
+        remainingTimeText = '${remaining.inDays}天';
+      } else if (remaining.inHours > 0) {
+        remainingTimeText = '${remaining.inHours}小时';
+      } else {
+        remainingTimeText = '${remaining.inMinutes}分钟';
+      }
+    }
+
+    return Card(
+      elevation: 0,
+      color: isUrgent
+          ? colorScheme.errorContainer.withValues(alpha: 0.3)
+          : colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isUrgent
+              ? colorScheme.error.withValues(alpha: 0.3)
+              : colorScheme.outlineVariant.withValues(alpha: 0.3),
+          width: 0.5,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          // 可以添加活动详情跳转
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: (isUrgent ? colorScheme.error : accentColor)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isUrgent ? Icons.flash_on_rounded : icon,
+                  size: 22,
+                  color: isUrgent ? colorScheme.error : accentColor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      activity.name,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      course.courseName,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: (isUrgent ? colorScheme.error : accentColor)
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      remainingTimeText,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: isUrgent ? colorScheme.error : accentColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (totalCount > 1) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '${index + 1}/$totalCount',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 构建单个作业卡片
@@ -3413,13 +4069,11 @@ class _HomeScreenState extends State<HomeScreen>
 /// 城市选择器组件
 class _CitySelector extends StatefulWidget {
   final Function(String cityPinyin, String cityName) onCitySelected;
+
   /// 定位请求回调，返回定位结果
   final Future<LocationCityResult> Function()? onLocationRequest;
 
-  const _CitySelector({
-    required this.onCitySelected,
-    this.onLocationRequest,
-  });
+  const _CitySelector({required this.onCitySelected, this.onLocationRequest});
 
   @override
   State<_CitySelector> createState() => _CitySelectorState();
@@ -3478,7 +4132,8 @@ class _CitySelectorState extends State<_CitySelector> {
         // 定位失败，显示错误
         setState(() {
           _isLocating = false;
-          _locationError = result.errorMessage ?? _getErrorMessage(result.error);
+          _locationError =
+              result.errorMessage ?? _getErrorMessage(result.error);
         });
       }
     } catch (e) {
@@ -3677,7 +4332,8 @@ class _CitySelectorState extends State<_CitySelector> {
                     },
                   ),
                   // 只有当 “市 != 省” 时才显示市级 chip
-                  if (_selectedCity != null && _selectedCity != _selectedProvince)
+                  if (_selectedCity != null &&
+                      _selectedCity != _selectedProvince)
                     _buildPathChip(
                       _selectedCity!,
                       onTap: () {
@@ -3775,10 +4431,7 @@ class _CitySelectorState extends State<_CitySelector> {
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right,
-                  color: colorScheme.onSurfaceVariant,
-                ),
+                Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
               ],
             ),
           ),

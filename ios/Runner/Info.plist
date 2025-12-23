@@ -84,6 +84,12 @@
       <string>location</string>
     </array>
 
+	<!-- 访问用户文档目录 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
 	<!-- 查询其他 App 的 URL Scheme 权限 -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>

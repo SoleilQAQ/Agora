@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../models/account.dart';
 import '../services/account_manager.dart';
+import '../services/auth_storage.dart';
 import 'xxt_sign_accounts_screen.dart';
 
 /// 账号管理页面
@@ -286,11 +287,30 @@ class _AccountManageScreenState extends State<AccountManageScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '学号: ${account.username}',
+                          account.username.isEmpty
+                              ? '本地账号 · 仅学习通功能'
+                              : '学号: ${account.username}',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
+                            color: account.username.isEmpty
+                                ? colorScheme.tertiary
+                                : colorScheme.onSurfaceVariant,
+                            fontWeight: account.username.isEmpty
+                                ? FontWeight.w500
+                                : null,
                           ),
                         ),
+                        if (account.username.isEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '可在编辑中添加教务系统账号',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant.withValues(
+                                alpha: 0.7,
+                              ),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -471,22 +491,71 @@ class _AccountManageScreenState extends State<AccountManageScreen> {
         title: '编辑账号',
         account: account,
         onSave: (username, password, displayName, xuexitong) async {
+          // 如果是本地用户(原账号为空),且填写了教务系统账号密码,则清除skipJwxtLogin标志
+          final isLocalUser = account.username.isEmpty;
+          final hasJwxtCredentials = username.isNotEmpty && password.isNotEmpty;
+
           final updated = account.copyWith(
             username: username,
             password: password,
             displayName: displayName,
             xuexitong: xuexitong,
+            clearXuexitong: xuexitong == null && account.hasXuexitong,
           );
           await _accountManager.updateAccount(updated);
+
+          // 如果本地用户添加了教务系统账号,清除跳过登录标志
+          if (isLocalUser && hasJwxtCredentials) {
+            await AuthStorage.setSkipJwxtLogin(false);
+          }
+
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('账号更新成功'),
+              SnackBar(
+                content: Text(
+                  isLocalUser && hasJwxtCredentials
+                      ? '账号更新成功,已启用教务系统功能'
+                      : '账号更新成功',
+                ),
                 behavior: SnackBarBehavior.floating,
               ),
             );
+
+            // 如果修改的是当前活跃账号且添加了教务系统账号,提示用户重新登录
+            if (account.isActive && isLocalUser && hasJwxtCredentials) {
+              _showReloginPrompt();
+            }
           }
         },
+      ),
+    );
+  }
+
+  /// 提示用户重新登录
+  void _showReloginPrompt() {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.info_outline, color: colorScheme.primary, size: 32),
+        title: const Text('需要重新登录'),
+        content: const Text('您已添加教务系统账号,需要重新登录以启用完整功能。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('稍后'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context); // 关闭对话框
+              if (widget.onAccountSwitch != null) {
+                widget.onAccountSwitch!(); // 触发重新登录
+              }
+            },
+            child: const Text('立即登录'),
+          ),
+        ],
       ),
     );
   }
@@ -653,12 +722,19 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
               ),
               const SizedBox(height: 24),
 
-              // 教务系统账号
+              // 教务系统账号（可选）
               Text(
-                '教务系统账号',
+                '教务系统账号（可选）',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w600,
                   color: colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '不填写则仅使用学习通功能',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.outline,
                 ),
               ),
               const SizedBox(height: 12),
@@ -668,17 +744,12 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                 controller: _usernameController,
                 decoration: const InputDecoration(
                   labelText: '学号',
-                  hintText: '请输入学号',
+                  hintText: '请输入学号（可选）',
                   prefixIcon: Icon(Icons.person_outline, size: 20),
                 ),
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return '请输入学号';
-                  }
-                  return null;
-                },
+                // 移除必填验证，改为可选
               ),
               const SizedBox(height: 12),
 
@@ -687,7 +758,7 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                 controller: _passwordController,
                 decoration: InputDecoration(
                   labelText: '密码',
-                  hintText: '请输入教务系统密码',
+                  hintText: '请输入教务系统密码（可选）',
                   prefixIcon: const Icon(Icons.lock_outline, size: 20),
                   suffixIcon: IconButton(
                     icon: Icon(
@@ -702,12 +773,7 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                 ),
                 obscureText: _obscurePassword,
                 textInputAction: TextInputAction.next,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return '请输入密码';
-                  }
-                  return null;
-                },
+                // 移除必填验证，改为可选
               ),
               const SizedBox(height: 12),
 
@@ -736,8 +802,14 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                   const Spacer(),
                   Switch(
                     value: _showXuexitong,
-                    onChanged: (value) =>
-                        setState(() => _showXuexitong = value),
+                    onChanged: (value) {
+                      setState(() => _showXuexitong = value);
+                      // 关闭时清空学习通输入框
+                      if (!value) {
+                        _xxtUsernameController.clear();
+                        _xxtPasswordController.clear();
+                      }
+                    },
                   ),
                 ],
               ),
@@ -829,7 +901,35 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
   }
 
   Future<void> _handleSave() async {
-    if (!_formKey.currentState!.validate()) return;
+    // 验证：至少需要填写教务系统账号或学习通账号
+    final hasJwxt = _usernameController.text.trim().isNotEmpty &&
+        _passwordController.text.isNotEmpty;
+    final hasXxt = _showXuexitong &&
+        _xxtUsernameController.text.trim().isNotEmpty &&
+        _xxtPasswordController.text.isNotEmpty;
+
+    if (!hasJwxt && !hasXxt) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('请至少填写教务系统账号或学习通账号'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // 如果只填了学号没填密码，或只填了密码没填学号，提示用户
+    final usernameEmpty = _usernameController.text.trim().isEmpty;
+    final passwordEmpty = _passwordController.text.isEmpty;
+    if (usernameEmpty != passwordEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('教务系统账号和密码需要同时填写或同时留空'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
 
     setState(() => _isSaving = true);
 

@@ -343,10 +343,23 @@ class JwxtService {
       if (response.statusCode == 200) {
         final json = response.data as Map<String, dynamic>;
         if (json['success'] == true) {
-          // 后端可能返回 'data' 数组或 'rows' 数组
-          final dataList = json['data'] as List<dynamic>? ??
-              json['rows'] as List<dynamic>? ??
-              [];
+          final data = json['data'];
+          
+          List<dynamic> dataList;
+          if (data is List<dynamic>) {
+            // data 直接是数组
+            dataList = data;
+          } else if (data is Map<String, dynamic>) {
+            // data 是对象，尝试从中提取成绩列表
+            dataList = data['grades'] as List<dynamic>? ??
+                data['rows'] as List<dynamic>? ??
+                data['list'] as List<dynamic>? ??
+                [];
+          } else {
+            // 尝试从根 json 获取
+            dataList = json['rows'] as List<dynamic>? ?? [];
+          }
+          
           return _parseGradesFromJson(dataList, json);
         }
       }
@@ -377,6 +390,11 @@ class JwxtService {
       return _parseGradesFromFlatJson(jsonList);
     }
     
+    // 如果包含蛇形命名（snake_case），使用扁平格式解析
+    if (firstItem.containsKey('course_name') || firstItem.containsKey('course_code')) {
+      return _parseGradesFromSnakeCaseJson(jsonList);
+    }
+    
     // 否则使用按学期分组的格式解析
     return _parseGradesFromGroupedJson(jsonList);
   }
@@ -403,6 +421,61 @@ class JwxtService {
         score: score,
         gpa: gpaStr != null ? double.tryParse(gpaStr) : null,
         credit: double.tryParse(creditStr) ?? 0.0,
+        courseType: courseType,
+        semester: semester,
+      );
+
+      semesterMap.putIfAbsent(semester, () => []).add(grade);
+    }
+
+    // 转换为 SemesterGrades 列表
+    final result = semesterMap.entries
+        .map((e) => SemesterGrades(semester: e.key, grades: e.value))
+        .toList();
+
+    // 按学期倒序排列
+    result.sort((a, b) => b.semester.compareTo(a.semester));
+    return result;
+  }
+
+  /// 从蛇形命名（snake_case）格式解析成绩
+  List<SemesterGrades> _parseGradesFromSnakeCaseJson(List<dynamic> jsonList) {
+    // 按学期分组
+    final semesterMap = <String, List<Grade>>{};
+
+    for (final item in jsonList) {
+      final gradeJson = item as Map<String, dynamic>;
+      
+      final semester = gradeJson['semester'] as String? ?? '未知学期';
+      final courseName = gradeJson['course_name'] as String? ?? '';
+      final courseCode = gradeJson['course_code'] as String?;
+      
+      // 优先使用 score_value（数字），否则使用 score（字符串）
+      final scoreValue = gradeJson['score_value'];
+      final score = scoreValue != null 
+          ? scoreValue.toString() 
+          : (gradeJson['score']?.toString() ?? '');
+      
+      // 解析学分：可能是字符串或数字
+      final creditValue = gradeJson['credit'];
+      final credit = creditValue is num 
+          ? creditValue.toDouble() 
+          : (double.tryParse(creditValue?.toString() ?? '0') ?? 0.0);
+      
+      // 解析绩点：可能是字符串或数字
+      final gpaValue = gradeJson['gpa'];
+      final gpa = gpaValue is num 
+          ? gpaValue.toDouble() 
+          : (gpaValue != null ? double.tryParse(gpaValue.toString()) : null);
+      
+      final courseType = gradeJson['course_type'] as String?;
+      
+      final grade = Grade(
+        courseName: courseName,
+        courseCode: courseCode,
+        score: score,
+        gpa: gpa,
+        credit: credit,
         courseType: courseType,
         semester: semester,
       );

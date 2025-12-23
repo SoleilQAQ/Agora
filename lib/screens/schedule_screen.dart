@@ -7,6 +7,7 @@ import 'package:flutter/physics.dart';
 
 import '../models/models.dart';
 import '../services/services.dart';
+import 'account_manage_screen.dart';
 
 /// 平滑的页面滑动物理效果
 /// 优化滑动响应速度和动画流畅度
@@ -560,66 +561,83 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return ListenableBuilder(
-      listenable: widget.dataManager,
-      builder: (context, child) {
-        final isLoading =
-            widget.dataManager.scheduleState == LoadingState.loading;
-        final hasError = widget.dataManager.scheduleState == LoadingState.error;
-        final schedule = widget.dataManager.schedule;
-        final currentWeek = widget.dataManager.currentWeek;
+    return FutureBuilder<bool>(
+      future: AuthStorage.getSkipJwxtLogin(),
+      builder: (context, skipSnapshot) {
+        final skipJwxtLogin = skipSnapshot.data ?? false;
 
-        // 确保选中周不超过总周数
-        final totalWeeks = schedule?.totalWeeks ?? 20;
-        if (_selectedWeek > totalWeeks) {
-          _selectedWeek = currentWeek;
-        }
+        return ListenableBuilder(
+          listenable: widget.dataManager,
+          builder: (context, child) {
+            final isLoading =
+                widget.dataManager.scheduleState == LoadingState.loading;
+            final hasError =
+                widget.dataManager.scheduleState == LoadingState.error;
+            final schedule = widget.dataManager.schedule;
+            final currentWeek = widget.dataManager.currentWeek;
 
-        return Scaffold(
-          backgroundColor: colorScheme.surface,
-          body: Column(
-            children: [
-              // 顶部区域
-              _buildHeader(
-                theme,
-                colorScheme,
-                schedule,
-                currentWeek,
-                totalWeeks,
-                isLoading,
+            // 学习通模式下，如果有课表数据（可能是导入的），不应该显示错误状态
+            final shouldShowError =
+                hasError && !(skipJwxtLogin && schedule != null);
+
+            // 确保选中周不超过总周数
+            final totalWeeks = schedule?.totalWeeks ?? 20;
+            if (_selectedWeek > totalWeeks) {
+              _selectedWeek = currentWeek;
+            }
+
+            return Scaffold(
+              backgroundColor: colorScheme.surface,
+              body: Column(
+                children: [
+                  // 顶部区域
+                  _buildHeader(
+                    theme,
+                    colorScheme,
+                    schedule,
+                    currentWeek,
+                    totalWeeks,
+                    isLoading,
+                  ),
+                  // 周次选择器
+                  _buildWeekSelector(
+                    theme,
+                    colorScheme,
+                    totalWeeks,
+                    currentWeek,
+                  ),
+                  // 课程表主体（支持左右滑动切换周数）
+                  Expanded(
+                    child: isLoading
+                        ? _buildLoadingState(colorScheme)
+                        : shouldShowError
+                        ? _buildErrorState(theme, colorScheme)
+                        : schedule == null
+                        ? _buildEmptyState(theme, colorScheme)
+                        : _buildSwipeableSchedule(
+                            theme,
+                            colorScheme,
+                            schedule,
+                            totalWeeks,
+                          ),
+                  ),
+                ],
               ),
-              // 周次选择器
-              _buildWeekSelector(theme, colorScheme, totalWeeks, currentWeek),
-              // 课程表主体（支持左右滑动切换周数）
-              Expanded(
-                child: isLoading
-                    ? _buildLoadingState(colorScheme)
-                    : hasError
-                    ? _buildErrorState(theme, colorScheme)
-                    : schedule == null
-                    ? _buildEmptyState(theme, colorScheme)
-                    : _buildSwipeableSchedule(
-                        theme,
-                        colorScheme,
-                        schedule,
-                        totalWeeks,
-                      ),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
   }
 
   Widget _buildHeader(
-      ThemeData theme,
-      ColorScheme colorScheme,
-      Schedule? schedule,
-      int currentWeek,
-      int totalWeeks,
-      bool isLoading,
-      ) {
+    ThemeData theme,
+    ColorScheme colorScheme,
+    Schedule? schedule,
+    int currentWeek,
+    int totalWeeks,
+    bool isLoading,
+  ) {
     return SafeArea(
       bottom: false,
       child: Container(
@@ -690,13 +708,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
             IconButton(
               icon: isLoading
                   ? SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: colorScheme.primary,
-                ),
-              )
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: colorScheme.primary,
+                      ),
+                    )
                   : const Icon(Icons.refresh_rounded),
               onPressed: isLoading
                   ? null
@@ -714,7 +732,6 @@ class _ScheduleScreenState extends State<ScheduleScreen>
       ),
     );
   }
-
 
   /// 构建返回本周按钮，带缩小移动动画
   Widget _buildBackToWeekButton(ColorScheme colorScheme, int currentWeek) {
@@ -1052,55 +1069,102 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildEmptyState(ThemeData theme, ColorScheme colorScheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.event_note_rounded,
-                size: 56,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              '暂无课程数据',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '尝试刷新或检查网络连接',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 32),
-            FilledButton.icon(
-              onPressed: () =>
-                  widget.dataManager.loadSchedule(forceRefresh: true),
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('刷新'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+    return FutureBuilder<bool>(
+      future: AuthStorage.getSkipJwxtLogin(),
+      builder: (context, snapshot) {
+        final skipJwxtLogin = snapshot.data ?? false;
+
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(40),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    skipJwxtLogin
+                        ? Icons.school_outlined
+                        : Icons.event_note_rounded,
+                    size: 56,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 24),
+                Text(
+                  skipJwxtLogin ? '学习通模式' : '暂无课程数据',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: colorScheme.onSurface,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  skipJwxtLogin ? '登录教务系统后可查看课程表' : '尝试刷新或检查网络连接',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                if (skipJwxtLogin)
+                  // 学习通模式下显示添加账号和导入按钮
+                  Column(
+                    children: [
+                      FilledButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const AccountManageScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('添加教务系统账号'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.tonalIcon(
+                        onPressed: () => _importSchedule(),
+                        icon: const Icon(Icons.file_upload_rounded),
+                        label: const Text('导入课表'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: () =>
+                        widget.dataManager.loadSchedule(forceRefresh: true),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('刷新'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -1894,6 +1958,60 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     );
   }
 
+  /// 导出课表
+  Future<void> _exportSchedule(Schedule schedule) async {
+    try {
+      await ScheduleImportExportService.showExportOptionsDialog(
+        context,
+        schedule,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导出失败: $e')));
+      }
+    }
+  }
+
+  /// 导入课表
+  Future<void> _importSchedule() async {
+    try {
+      final schedule =
+          await ScheduleImportExportService.showImportOptionsDialog(context);
+
+      if (schedule != null) {
+        // 保存导入的课表
+        final success = await ScheduleImportExportService.saveImportedSchedule(
+          schedule,
+        );
+
+        if (success) {
+          // 刷新数据管理器以加载新课表
+          await widget.dataManager.loadSchedule(forceRefresh: true);
+
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('课表导入成功')));
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('保存课表失败')));
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('导入失败: $e')));
+      }
+    }
+  }
+
   /// 显示课程表设置
   void _showScheduleSettings() {
     final theme = Theme.of(context);
@@ -1908,8 +2026,317 @@ class _ScheduleScreenState extends State<ScheduleScreen>
       backgroundColor: Colors.transparent,
       showDragHandle: false,
       builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          // 获取当前课表
+          final currentSchedule = widget.dataManager.schedule;
+
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.9,
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+            ),
+            child: Column(
+              children: [
+                // 拖拽指示器
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                // 标题栏
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '课程表设置',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          // 保存设置
+                          await AuthStorage.saveScheduleSettings(
+                            editingSettings,
+                          );
+                          // 根据设置生成新时间表
+                          final newTimetable = AuthStorage.generateTimetable(
+                            editingSettings,
+                          );
+                          await AuthStorage.saveCustomTimetable(newTimetable);
+
+                          setState(() {
+                            _scheduleSettings = editingSettings;
+                            _totalSections = editingSettings.totalSections;
+                            _sectionTimes = newTimetable;
+                          });
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                        child: const Text('保存'),
+                      ),
+                    ],
+                  ),
+                ),
+                // 重置按钮
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: () {
+                          setModalState(() {
+                            editingSettings =
+                                AuthStorage.defaultScheduleSettings;
+                          });
+                        },
+                        icon: const Icon(Icons.restore, size: 18),
+                        label: const Text('恢复默认'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: colorScheme.error,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '共 ${editingSettings.totalSections} 节课',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                // 设置列表
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    children: [
+                      // 学期设置区（移到最上方）
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '学期设置',
+                        Icons.calendar_month_rounded,
+                        [
+                          _buildSemesterStartDateItem(
+                            context,
+                            theme,
+                            colorScheme,
+                            setModalState,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 节数设置区
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '节数设置',
+                        Icons.view_agenda_rounded,
+                        [
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '上午节数',
+                            editingSettings.morningSections,
+                            1,
+                            6,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  morningSections: value,
+                                );
+                              });
+                            },
+                          ),
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '下午节数',
+                            editingSettings.afternoonSections,
+                            1,
+                            6,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  afternoonSections: value,
+                                );
+                              });
+                            },
+                          ),
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '晚上节数',
+                            editingSettings.eveningSections,
+                            0,
+                            6,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  eveningSections: value,
+                                );
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 显示设置区
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '显示设置',
+                        Icons.visibility_rounded,
+                        [
+                          _buildSwitchSettingItem(
+                            theme,
+                            colorScheme,
+                            '显示非本周课程',
+                            '以降低对比度方式显示其他周的课程',
+                            editingSettings.showNonCurrentWeekCourses,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  showNonCurrentWeekCourses: value,
+                                );
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 课表管理
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '课表管理',
+                        Icons.table_chart_rounded,
+                        [
+                          ListTile(
+                            leading: Icon(
+                              Icons.file_download_rounded,
+                              color: colorScheme.primary,
+                            ),
+                            title: const Text('导出课表'),
+                            subtitle: const Text('保存或分享课表数据'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: currentSchedule != null
+                                ? () async {
+                                    await _exportSchedule(currentSchedule);
+                                  }
+                                : null,
+                          ),
+                          const Divider(height: 1, indent: 56, endIndent: 16),
+                          ListTile(
+                            leading: Icon(
+                              Icons.file_upload_rounded,
+                              color: colorScheme.primary,
+                            ),
+                            title: const Text('导入课表'),
+                            subtitle: const Text('从文件导入课表数据'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () async {
+                              await _importSchedule();
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 其他操作
+                      Card(
+                        elevation: 0,
+                        color: colorScheme.surfaceContainerHigh,
+                        child: Column(
+                          children: [
+                            ListTile(
+                              leading: Icon(
+                                Icons.schedule_rounded,
+                                color: colorScheme.primary,
+                              ),
+                              title: const Text('课程时间设置'),
+                              subtitle: const Text('设置开始时间、课时长度和课间时间'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                _showCourseTimeSettings(
+                                  context,
+                                  theme,
+                                  colorScheme,
+                                  editingSettings,
+                                  setModalState,
+                                );
+                              },
+                            ),
+                            const Divider(height: 1, indent: 56, endIndent: 16),
+                            ListTile(
+                              leading: Icon(
+                                Icons.edit_calendar_rounded,
+                                color: colorScheme.primary,
+                              ),
+                              title: const Text('编辑详细时间表'),
+                              subtitle: const Text('微调每节课的具体时间'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                _showTimetableEditor();
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      // 预览时间表
+                      _buildTimetablePreview(
+                        theme,
+                        colorScheme,
+                        editingSettings,
+                      ),
+                      const SizedBox(height: 32),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 显示课程时间设置（二级弹窗）
+  void _showCourseTimeSettings(
+    BuildContext parentContext,
+    ThemeData theme,
+    ColorScheme colorScheme,
+    ScheduleSettings editingSettings,
+    StateSetter parentSetState,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => Container(
-          height: MediaQuery.of(context).size.height * 0.9,
+          height: MediaQuery.of(context).size.height * 0.85,
           decoration: BoxDecoration(
             color: colorScheme.surface,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
@@ -1935,65 +2362,19 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                 child: Row(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(Icons.arrow_back),
                       onPressed: () => Navigator.pop(context),
                     ),
                     Expanded(
                       child: Text(
-                        '课程表设置',
+                        '课程时间设置',
                         style: theme.textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
                         textAlign: TextAlign.center,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () async {
-                        // 保存设置
-                        await AuthStorage.saveScheduleSettings(editingSettings);
-                        // 根据设置生成新时间表
-                        final newTimetable = AuthStorage.generateTimetable(
-                          editingSettings,
-                        );
-                        await AuthStorage.saveCustomTimetable(newTimetable);
-
-                        setState(() {
-                          _scheduleSettings = editingSettings;
-                          _totalSections = editingSettings.totalSections;
-                          _sectionTimes = newTimetable;
-                        });
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                      child: const Text('保存'),
-                    ),
-                  ],
-                ),
-              ),
-              // 重置按钮
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: () {
-                        setModalState(() {
-                          editingSettings = AuthStorage.defaultScheduleSettings;
-                        });
-                      },
-                      icon: const Icon(Icons.restore, size: 18),
-                      label: const Text('恢复默认'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: colorScheme.error,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '共 ${editingSettings.totalSections} 节课',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    const SizedBox(width: 48), // 占位保持标题居中
                   ],
                 ),
               ),
@@ -2003,28 +2384,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                 child: ListView(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   children: [
-                    // 学期设置区（移到最上方）
-                    _buildSettingsSection(
-                      theme,
-                      colorScheme,
-                      '学期设置',
-                      Icons.calendar_month_rounded,
-                      [
-                        _buildSemesterStartDateItem(
-                          context,
-                          theme,
-                          colorScheme,
-                          setModalState,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
                     // 时间设置区
                     _buildSettingsSection(
                       theme,
                       colorScheme,
-                      '时间设置',
-                      Icons.schedule_rounded,
+                      '开始时间',
+                      Icons.access_time_rounded,
                       [
                         _buildTimeSettingItem(
                           theme,
@@ -2032,7 +2398,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           '上午开始',
                           editingSettings.morningStartTime,
                           (time) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 morningStartTime: time,
                               );
@@ -2045,7 +2411,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           '下午开始',
                           editingSettings.afternoonStartTime,
                           (time) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 afternoonStartTime: time,
                               );
@@ -2058,64 +2424,9 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           '晚上开始',
                           editingSettings.eveningStartTime,
                           (time) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 eveningStartTime: time,
-                              );
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // 节数设置区
-                    _buildSettingsSection(
-                      theme,
-                      colorScheme,
-                      '节数设置',
-                      Icons.view_agenda_rounded,
-                      [
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '上午节数',
-                          editingSettings.morningSections,
-                          1,
-                          6,
-                          (value) {
-                            setModalState(() {
-                              editingSettings = editingSettings.copyWith(
-                                morningSections: value,
-                              );
-                            });
-                          },
-                        ),
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '下午节数',
-                          editingSettings.afternoonSections,
-                          1,
-                          6,
-                          (value) {
-                            setModalState(() {
-                              editingSettings = editingSettings.copyWith(
-                                afternoonSections: value,
-                              );
-                            });
-                          },
-                        ),
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '晚上节数',
-                          editingSettings.eveningSections,
-                          0,
-                          6,
-                          (value) {
-                            setModalState(() {
-                              editingSettings = editingSettings.copyWith(
-                                eveningSections: value,
                               );
                             });
                           },
@@ -2127,7 +2438,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                     _buildSettingsSection(
                       theme,
                       colorScheme,
-                      '课时设置',
+                      '课时长度',
                       Icons.timer_rounded,
                       [
                         _buildNumberSettingItem(
@@ -2138,7 +2449,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           30,
                           60,
                           (value) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 classDuration: value,
                               );
@@ -2154,7 +2465,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           0,
                           20,
                           (value) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 shortBreak: value,
                               );
@@ -2170,7 +2481,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           10,
                           40,
                           (value) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 longBreak: value,
                               );
@@ -2186,7 +2497,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           1,
                           4,
                           (value) {
-                            setModalState(() {
+                            parentSetState(() {
                               editingSettings = editingSettings.copyWith(
                                 longBreakInterval: value,
                               );
@@ -2197,55 +2508,34 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                       ],
                     ),
                     const SizedBox(height: 16),
-                    // 显示设置区
-                    _buildSettingsSection(
-                      theme,
-                      colorScheme,
-                      '显示设置',
-                      Icons.visibility_rounded,
-                      [
-                        _buildSwitchSettingItem(
-                          theme,
-                          colorScheme,
-                          '显示非本周课程',
-                          '以降低对比度方式显示其他周的课程',
-                          editingSettings.showNonCurrentWeekCourses,
-                          (value) {
-                            setModalState(() {
-                              editingSettings = editingSettings.copyWith(
-                                showNonCurrentWeekCourses: value,
-                              );
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // 其他操作
+                    // 提示信息
                     Card(
                       elevation: 0,
-                      color: colorScheme.surfaceContainerHigh,
-                      child: Column(
-                        children: [
-                          ListTile(
-                            leading: Icon(
-                              Icons.edit_calendar_rounded,
+                      color: colorScheme.primaryContainer.withValues(
+                        alpha: 0.3,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.info_outline,
+                              size: 20,
                               color: colorScheme.primary,
                             ),
-                            title: const Text('编辑详细时间表'),
-                            subtitle: const Text('微调每节课的具体时间'),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () {
-                              Navigator.pop(context);
-                              _showTimetableEditor();
-                            },
-                          ),
-                        ],
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '设置会自动生成时间表，如需精确调整请使用"编辑详细时间表"',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurface,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-                    // 预览时间表
-                    _buildTimetablePreview(theme, colorScheme, editingSettings),
                     const SizedBox(height: 32),
                   ],
                 ),
@@ -2565,7 +2855,6 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   /// 显示学期开始日期选择器
-  /// TODO 可切换俩种方式 默认/年月日选择
   Future<void> _showSemesterStartDatePicker(
     BuildContext context,
     DateTime? currentDate,

@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import '../models/xxt_sign.dart';
 import '../models/xxt_activity.dart';
 import 'account_manager.dart';
+import 'auth_storage.dart';
 
 /// 学习通签到服务
 class XxtSignService {
@@ -504,6 +505,9 @@ class XxtSignService {
             classId: classId,
           );
           debugPrint('解析到签退信息: $signOutInfo');
+
+          // 缓存这个活动有签退，避免后续API调用失败时丢失信息
+          await AuthStorage.markActivityHasSignOut(activeId);
         }
 
         return XxtSignActivity(

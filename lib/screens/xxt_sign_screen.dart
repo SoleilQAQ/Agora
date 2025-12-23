@@ -12,6 +12,7 @@ import '../models/xxt_sign.dart';
 import '../models/xxt_activity.dart';
 import '../services/xxt_sign_service.dart';
 import '../services/xxt_sign_account_manager.dart';
+import '../services/auth_storage.dart';
 
 /// 签到页面
 class XxtSignScreen extends StatefulWidget {
@@ -106,6 +107,30 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
             _error = '获取签到详情失败';
           }
         });
+      }
+
+      // 如果检测到有签退，缓存完整的活动信息
+      if (signActivity?.signOutInfo != null) {
+        debugPrint('检测到签退信息，准备缓存活动...');
+        final activityJson = widget.activity.toJson();
+        activityJson['courseId'] = widget.courseActivity.courseId;
+        activityJson['classId'] = widget.courseActivity.classId;
+        activityJson['courseName'] = widget.courseActivity.courseName;
+        activityJson['hasSignOut'] = true;
+        activityJson['signOutInfo'] = {
+          'signInId': signActivity!.signOutInfo!.signInId,
+          'signOutId': signActivity.signOutInfo!.signOutId,
+          'publishTime': signActivity.signOutInfo!.signOutPublishTime
+              ?.toIso8601String(),
+        };
+        debugPrint(
+          '缓存内容: courseId=${activityJson['courseId']}, '
+          'classId=${activityJson['classId']}, '
+          'activeId=${activityJson['activeId']}, '
+          'name=${activityJson['name']}',
+        );
+        await AuthStorage.cacheSignOutActivity(activityJson);
+        debugPrint('✓ 已缓存签退活动信息: activeId=${widget.activity.activeId}');
       }
 
       // 如果是位置签到，自动获取位置
@@ -409,6 +434,55 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
     }
   }
 
+  /// 标记签退已完成
+  Future<void> _markSignOutCompleted() async {
+    if (_signActivity == null) return;
+
+    // 显示确认对话框
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认操作'),
+        content: const Text(
+          '确认已完成签退？\n\n'
+          '此操作将从活动列表中移除该签到/签退活动。\n'
+          '如果您还未完成签退，请不要点击确认。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      // 标记为已完成
+      await AuthStorage.markSignOutCompleted(_signActivity!.activeId);
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已标记签退完成，活动将从列表中移除')));
+        // 返回上一页并刷新
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('操作失败: $e')));
+      }
+    }
+  }
+
   /// 处理验证码请求
   Future<String?> _handleCaptchaRequired(XxtCaptchaData captchaData) async {
     if (!mounted) return null;
@@ -626,7 +700,7 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
                 ),
                 title: Text(r.account.displayName),
                 subtitle: Text(
-                  r.result.message ?? (r.result.success ? '签到成功' : '签到失败'),
+                  r.result.message,
                   style: TextStyle(
                     color: r.result.success
                         ? colorScheme.onSurfaceVariant
@@ -676,84 +750,141 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
   }
 
   Widget _buildSignForm(ThemeData theme, ColorScheme colorScheme) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 签到信息卡片
-          _buildInfoCard(theme, colorScheme),
+    return Column(
+      children: [
+        // 可滚动内容区域
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 签到信息卡片
+                _buildInfoCard(theme, colorScheme),
 
-          // 签退提示
-          if (_signActivity?.signOutInfo?.shouldShowTips == true) ...[
-            const SizedBox(height: 12),
-            _buildSignOutTips(theme, colorScheme),
-          ],
+                // 签退提示
+                if (_signActivity?.signOutInfo?.shouldShowTips == true) ...[
+                  const SizedBox(height: 12),
+                  _buildSignOutTips(theme, colorScheme),
+                ],
 
-          const SizedBox(height: 24),
+                const SizedBox(height: 24),
 
-          // 根据签到类型显示不同输入
-          if (_signActivity != null) ...[
-            _buildSignTypeSection(theme, colorScheme),
-            const SizedBox(height: 24),
-          ],
+                // 根据签到类型显示不同输入
+                if (_signActivity != null) ...[
+                  _buildSignTypeSection(theme, colorScheme),
+                  const SizedBox(height: 24),
+                ],
 
-          // 分享签到选项
-          if (_accountManager.accounts.isNotEmpty) ...[
-            _buildShareSignSection(theme, colorScheme),
-            const SizedBox(height: 24),
-          ],
+                // 分享签到选项
+                if (_accountManager.accounts.isNotEmpty) ...[
+                  _buildShareSignSection(theme, colorScheme),
+                  const SizedBox(height: 24),
+                ],
 
-          // 错误提示
-          if (_error != null) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.error_outline_rounded, color: colorScheme.error),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      style: TextStyle(color: colorScheme.onErrorContainer),
+                // 错误提示
+                if (_error != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline_rounded,
+                          color: colorScheme.error,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _error!,
+                            style: TextStyle(
+                              color: colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 24),
                 ],
-              ),
+              ],
             ),
-            const SizedBox(height: 24),
-          ],
+          ),
+        ),
 
-          // 签到按钮（二维码签到不显示，因为已有扫描二维码按钮）
-          if (_signActivity?.signType != XxtSignType.qrcode)
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: FilledButton(
-                onPressed: _isLoading ? null : _doSign,
-                child: _isLoading
-                    ? SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: colorScheme.onPrimary,
-                        ),
-                      )
-                    : Text(
-                        _enableShareSign
-                            ? '分享签到 (${_selectedAccounts.length + 1}人)'
-                            : '立即签到',
-                        style: const TextStyle(fontSize: 16),
-                      ),
+        // 固定底部按钮区域
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.shadow.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, -2),
               ),
-            ),
-        ],
-      ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 签到按钮（二维码签到不显示，因为已有扫描二维码按钮）
+              if (_signActivity?.signType != XxtSignType.qrcode)
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: FilledButton(
+                    onPressed: _isLoading ? null : _doSign,
+                    child: _isLoading
+                        ? SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: colorScheme.onPrimary,
+                            ),
+                          )
+                        : Text(
+                            _enableShareSign
+                                ? '分享签到 (${_selectedAccounts.length + 1}人)'
+                                : '立即签到',
+                            style: const TextStyle(fontSize: 16),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                  ),
+                ),
+
+              // 确认已完成签退按钮（仅有签退信息时显示）
+              if (_signActivity?.signOutInfo != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _isLoading ? null : _markSignOutCompleted,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.tertiary,
+                      side: BorderSide(color: colorScheme.tertiary),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                    ),
+                    icon: Icon(Icons.check_circle_outline_rounded, size: 20),
+                    label: const Text(
+                      '确认已完成签退',
+                      style: TextStyle(fontSize: 15, height: 1.2),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 

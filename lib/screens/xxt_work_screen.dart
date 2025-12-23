@@ -218,6 +218,11 @@ class _XxtWorkScreenState extends State<XxtWorkScreen> {
     // 未交作业数量不包含已超时的
     final pendingCount = urgentWorks.length + normalWorks.length;
 
+    // 如果所有作业都已超时，显示特殊状态
+    if (pendingCount == 0 && overdueWorks.isEmpty) {
+      return _buildEmptyView(theme, colorScheme);
+    }
+
     return RefreshIndicator(
       onRefresh: () => _loadWorks(forceRefresh: true),
       child: ListView(
@@ -300,6 +305,29 @@ class _XxtWorkScreenState extends State<XxtWorkScreen> {
                   work,
                   status: 'overdue',
                 ),
+              ),
+            ),
+          ],
+
+          // 如果只有超时作业，没有待完成的，显示提示
+          if (pendingCount == 0 && overdueWorks.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Center(
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.check_circle_outline,
+                    size: 48,
+                    color: colorScheme.primary.withValues(alpha: 0.6),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '没有待完成的作业',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

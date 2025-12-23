@@ -597,6 +597,8 @@ class _StudyScreenState extends State<StudyScreen>
     final isUrgent = activity.isUrgent;
     final isCompleted = activity.status.isCompleted;
     final isPending = activity.status.isPending;
+    final hasSignOut = activity.hasSignOut;
+    final needSignOut = isCompleted && hasSignOut; // 已完成主签到但需要签退
 
     // 使用更柔和的颜色方案
     Color bgColor;
@@ -605,7 +607,14 @@ class _StudyScreenState extends State<StudyScreen>
     Color iconColor;
     Color mainColor;
 
-    if (isCompleted) {
+    if (needSignOut) {
+      // 需要签退：使用警告色（橙黄色）突出显示
+      bgColor = const Color(0xFFFF9800).withValues(alpha: 0.15);
+      borderColor = const Color(0xFFFF9800).withValues(alpha: 0.3);
+      iconBgColor = const Color(0xFFFF9800).withValues(alpha: 0.2);
+      iconColor = const Color(0xFFE65100);
+      mainColor = const Color(0xFFFF9800);
+    } else if (isCompleted) {
       // 已完成：柔和的绿色
       bgColor = const Color(0xFF4CAF50).withValues(alpha: 0.08);
       borderColor = const Color(0xFF4CAF50).withValues(alpha: 0.2);
@@ -656,9 +665,12 @@ class _StudyScreenState extends State<StudyScreen>
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
-                  isCompleted
-                      ? Icons.check_rounded
-                      : _getActivityIcon(activity.type),
+                  needSignOut
+                      ? Icons
+                            .logout_rounded // 需要签退：显示签退图标
+                      : (isCompleted
+                            ? Icons.check_rounded
+                            : _getActivityIcon(activity.type)),
                   size: 20,
                   color: iconColor,
                 ),
@@ -673,12 +685,15 @@ class _StudyScreenState extends State<StudyScreen>
                       activity.name,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
-                        color: isCompleted
-                            ? colorScheme.onSurfaceVariant.withValues(
-                                alpha: 0.7,
-                              )
-                            : colorScheme.onSurface,
-                        decoration: isCompleted
+                        // 需要签退的活动不应该变灰或加删除线
+                        color: needSignOut
+                            ? colorScheme.onSurface
+                            : (isCompleted
+                                  ? colorScheme.onSurfaceVariant.withValues(
+                                      alpha: 0.7,
+                                    )
+                                  : colorScheme.onSurface),
+                        decoration: (isCompleted && !needSignOut)
                             ? TextDecoration.lineThrough
                             : null,
                         decorationColor: colorScheme.onSurfaceVariant
@@ -697,7 +712,14 @@ class _StudyScreenState extends State<StudyScreen>
                           theme,
                         ),
                         // 状态标签
-                        if (isPending || isCompleted) ...[
+                        if (needSignOut) ...[
+                          const SizedBox(width: 6),
+                          _buildActivityTag(
+                            '待签退',
+                            const Color(0xFFFF9800),
+                            theme,
+                          ),
+                        ] else if (isPending || isCompleted) ...[
                           const SizedBox(width: 6),
                           _buildActivityTag(
                             isCompleted ? '已完成' : '待完成',
@@ -740,8 +762,9 @@ class _StudyScreenState extends State<StudyScreen>
               ),
             ],
           ),
-          // 签到按钮（仅对签到类型活动且未完成时显示）
-          if (isSignIn && !isCompleted) ...[
+          // 签到按钮
+          // 显示条件：1) 未完成的签到活动  2) 已完成但有签退的活动
+          if (isSignIn && (!isCompleted || activity.hasSignOut)) ...[
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -755,12 +778,20 @@ class _StudyScreenState extends State<StudyScreen>
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.edit_location_alt_rounded, size: 18),
-                    SizedBox(width: 6),
-                    Text('立即签到', style: TextStyle(fontWeight: FontWeight.w600)),
+                    Icon(
+                      isCompleted && activity.hasSignOut
+                          ? Icons.logout_rounded
+                          : Icons.edit_location_alt_rounded,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isCompleted && activity.hasSignOut ? '前往签退' : '立即签到',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ],
                 ),
               ),

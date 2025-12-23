@@ -4,6 +4,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../models/account.dart';
 import '../services/services.dart';
 
 /// 登录页面
@@ -32,6 +33,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _rememberPassword = true;
+  bool _skipJwxtLogin = false; // 仅使用学习通功能
   String? _errorMessage;
 
   // 动画控制器
@@ -62,6 +64,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     _animationController.forward();
     _loadSavedCredentials();
+    _loadSkipJwxtLoginFlag();
     // 显示传入的错误消息
     if (widget.errorMessage != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -74,19 +77,30 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  Future<void> _loadSavedCredentials() async {
-    // 优先加载完整凭据
-    final credentials = await AuthStorage.getCredentials();
-    if (credentials != null && mounted) {
+  Future<void> _loadSkipJwxtLoginFlag() async {
+    final skip = await AuthStorage.getSkipJwxtLogin();
+    if (mounted) {
       setState(() {
-        _usernameController.text = credentials.username;
-        _passwordController.text = credentials.password;
+        _skipJwxtLogin = skip;
+      });
+    }
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    // 从 AccountManager 获取当前活跃账号
+    final accountManager = AccountManager();
+    final activeAccount = accountManager.activeAccount;
+
+    if (activeAccount != null && mounted) {
+      setState(() {
+        _usernameController.text = activeAccount.username;
+        _passwordController.text = activeAccount.password;
         _rememberPassword = true;
       });
       return;
     }
 
-    // 如果没有完整凭据，尝试加载记忆的账号
+    // 如果没有活跃账号,尝试加载记忆的账号
     final rememberedUsername = await AuthStorage.getRememberedUsername();
     if (rememberedUsername != null && mounted) {
       setState(() {
@@ -106,6 +120,48 @@ class _LoginScreenState extends State<LoginScreen>
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // 如果选择仅使用学习通功能,创建本地用户账号
+    if (_skipJwxtLogin) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+
+      try {
+        final username = _usernameController.text.trim();
+        final password = _passwordController.text;
+
+        // 创建本地用户账号,教务系统账号密码为空,绑定学习通账号
+        await AccountManager().addAccount(
+          username: '', // 教务系统账号为空
+          password: '', // 教务系统密码为空
+          displayName: '本地用户',
+          setAsActive: true,
+          xuexitong: XuexitongAccount(username: username, password: password),
+        );
+
+        // 设置跳过教务系统登录标志
+        await AuthStorage.setSkipJwxtLogin(true);
+
+        if (mounted) {
+          widget.onLoginSuccess();
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = '创建本地用户失败: $e';
+          });
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -128,14 +184,8 @@ class _LoginScreenState extends State<LoginScreen>
       if (!mounted) return;
 
       if (result is LoginSuccess) {
-        // 保存凭据
-        if (_rememberPassword) {
-          await AuthStorage.saveCredentials(
-            username: _usernameController.text.trim(),
-            password: _passwordController.text,
-          );
-        } else {
-          // 即使不勾选记住密码，也保存账号
+        // 如果不记住密码,只保存用户名
+        if (!_rememberPassword) {
           await AuthStorage.saveRememberedUsername(
             _usernameController.text.trim(),
           );
@@ -306,14 +356,14 @@ class _LoginScreenState extends State<LoginScreen>
               children: [
                 // 标题
                 Text(
-                  '登录教务系统',
+                  _skipJwxtLogin ? '登录学习通账号' : '登录教务系统',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '使用学号和教务系统密码登录',
+                  _skipJwxtLogin ? '使用手机号和学习通密码登录' : '使用学号和教务系统密码登录',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
@@ -324,8 +374,8 @@ class _LoginScreenState extends State<LoginScreen>
                 TextFormField(
                   controller: _usernameController,
                   decoration: InputDecoration(
-                    labelText: '学号',
-                    hintText: '请输入学号',
+                    labelText: _skipJwxtLogin ? '手机号' : '学号',
+                    hintText: _skipJwxtLogin ? '请输入手机号' : '请输入学号',
                     prefixIcon: const Icon(Icons.person_outline, size: 20),
                     isDense: true,
                     filled: true,
@@ -336,6 +386,7 @@ class _LoginScreenState extends State<LoginScreen>
                   keyboardType: TextInputType.number,
                   textInputAction: TextInputAction.next,
                   validator: (value) {
+                    if (_skipJwxtLogin) return null; // 跳过验证
                     if (value == null || value.isEmpty) {
                       return '请输入学号';
                     }
@@ -349,7 +400,7 @@ class _LoginScreenState extends State<LoginScreen>
                   controller: _passwordController,
                   decoration: InputDecoration(
                     labelText: '密码',
-                    hintText: '请输入密码',
+                    hintText: _skipJwxtLogin ? '请输入学习通密码' : '请输入密码',
                     prefixIcon: const Icon(Icons.lock_outline, size: 20),
                     isDense: true,
                     suffixIcon: IconButton(
@@ -373,6 +424,7 @@ class _LoginScreenState extends State<LoginScreen>
                   obscureText: _obscurePassword,
                   onFieldSubmitted: (_) => _login(),
                   validator: (value) {
+                    if (_skipJwxtLogin) return null; // 跳过验证
                     if (value == null || value.isEmpty) {
                       return '请输入密码';
                     }
@@ -422,6 +474,61 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                               Text(
                                 '勾选后下次打开可无感登录',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: colorScheme.outline,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+
+                // 仅使用学习通功能
+                Transform.translate(
+                  offset: const Offset(-8, 0),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        height: 32,
+                        width: 32,
+                        child: Checkbox(
+                          value: _skipJwxtLogin,
+                          onChanged: (value) {
+                            setState(() {
+                              _skipJwxtLogin = value ?? false;
+                            });
+                          },
+                          materialTapTargetSize:
+                          MaterialTapTargetSize.shrinkWrap,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _skipJwxtLogin = !_skipJwxtLogin;
+                            });
+                          },
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '仅使用学习通功能',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              Text(
+                                '跳过教务系统登录，不查看课表和成绩',
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: colorScheme.outline,
                                   fontSize: 10,
@@ -496,7 +603,7 @@ class _LoginScreenState extends State<LoginScreen>
                             color: colorScheme.onPrimary,
                           ),
                         )
-                      : const Text('登录'),
+                      : Text(_skipJwxtLogin ? '登录学习通' : '登录'),
                 ),
               ],
             ),

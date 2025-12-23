@@ -129,28 +129,24 @@ class NotificationService {
     if (Platform.isAndroid) {
       final androidPlugin = _notifications
           .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-
-      // Android 13+ 需要请求通知权限，插件内部会处理
-      return await androidPlugin?.areNotificationsEnabled() ?? false;
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      final granted = await androidPlugin?.requestNotificationsPermission();
+      return granted ?? false;
     } else if (Platform.isIOS) {
       final iosPlugin = _notifications
           .resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>();
-
+            IOSFlutterLocalNotificationsPlugin
+          >();
       final granted = await iosPlugin?.requestPermissions(
         alert: true,
         badge: true,
         sound: true,
-      ) ??
-          false;
-
-      return granted;
+      );
+      return granted ?? false;
     }
     return false;
   }
-
-
 
   /// 检查通知权限
   Future<bool> checkPermission() async {
@@ -405,16 +401,18 @@ class NotificationService {
     debugPrint('已安排作业通知: $workName, 时间: $scheduledTime');
   }
 
-  /// 为活动安排即将结束通知
+  /// 为活动安排即将结束通知（支持多次提醒和动态更新）
   /// [activityName] 活动名称
   /// [courseName] 课程名称
   /// [activityType] 活动类型（签到、测验等）
   /// [endTime] 结束时间
+  /// [activityId] 活动唯一标识
   Future<void> scheduleActivityNotification({
     required String activityName,
     required String courseName,
     required String activityType,
     required DateTime endTime,
+    String? activityId,
   }) async {
     if (!_isInitialized) await initialize();
     _initializeTimezone();
@@ -431,85 +429,155 @@ class NotificationService {
       return;
     }
 
-    final minutesBefore = await getActivityMinutesBefore();
     final now = DateTime.now();
 
-    // 计算通知时间（结束前 N 分钟）
-    final notifyTime = endTime.subtract(Duration(minutes: minutesBefore));
-
-    // 如果通知时间已过或结束时间已过，不安排通知
-    if (notifyTime.isBefore(now) || endTime.isBefore(now)) {
-      debugPrint('活动通知时间已过: $activityName');
+    // 如果结束时间已过，不安排通知
+    if (endTime.isBefore(now)) {
+      debugPrint('活动已结束: $activityName');
       return;
     }
 
-    // 生成唯一 ID（基于活动名称和结束时间）
-    final notificationId =
-        ('activity_${activityName}_${endTime.millisecondsSinceEpoch}').hashCode
-                .abs() %
-            100000 +
-        10000; // 10000-109999 范围，避免与其他通知冲突
+    final totalRemainingMinutes = endTime.difference(now).inMinutes;
 
-    final remainingMinutes = endTime.difference(now).inMinutes;
-    final body = '[$courseName] $activityName\n⏰ 还有 $minutesBefore 分钟结束，请尽快完成！';
-
-    final androidDetails = AndroidNotificationDetails(
-      _activityChannelId,
-      _activityChannelName,
-      channelDescription: _activityChannelDescription,
-      importance: Importance.high,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-      icon: '@mipmap/ic_launcher',
-      styleInformation: BigTextStyleInformation(body),
-    );
-
-    const darwinDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-    );
-
-    final details = NotificationDetails(
-      android: androidDetails,
-      iOS: darwinDetails,
-    );
-
-    // 根据活动类型选择图标
-    String typeEmoji;
-    switch (activityType) {
-      case '签到':
-        typeEmoji = '📍';
-        break;
-      case '测验':
-      case '随堂练习':
-        typeEmoji = '📝';
-        break;
-      case '分组任务':
-        typeEmoji = '👥';
-        break;
-      default:
-        typeEmoji = '⚡';
+    // 根据剩余时间安排不同频率的通知
+    final notificationTimes = <int>[];
+    if (totalRemainingMinutes > 30) {
+      // 超过30分钟：提前30分钟、15分钟、5分钟
+      notificationTimes.addAll([30, 15, 5]);
+    } else if (totalRemainingMinutes > 15) {
+      // 15-30分钟：提前15分钟、5分钟
+      notificationTimes.addAll([15, 5]);
+    } else if (totalRemainingMinutes > 5) {
+      // 5-15分钟：提前5分钟
+      notificationTimes.add(5);
+    } else if (totalRemainingMinutes > 0) {
+      // 少于5分钟：立即通知
+      await showActivityUrgentNotification(
+        activityName: activityName,
+        courseName: courseName,
+        activityType: activityType,
+        remainingMinutes: totalRemainingMinutes,
+      );
+      return;
     }
 
-    await _notifications.zonedSchedule(
-      notificationId,
-      '$typeEmoji $activityType即将结束',
-      body,
-      tz.TZDateTime.from(notifyTime, tz.local),
-      details,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      payload: 'activity_$activityName',
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-    );
+    // 为每个时间点安排通知
+    for (final minutes in notificationTimes) {
+      if (minutes >= totalRemainingMinutes) continue;
 
-    debugPrint(
-      '已安排活动通知: $activityName, '
-      '结束时间: $endTime, '
-      '通知时间: $notifyTime (提前$minutesBefore分钟)',
-    );
+      final notifyTime = endTime.subtract(Duration(minutes: minutes));
+      if (notifyTime.isBefore(now)) continue;
+
+      // 生成唯一 ID
+      final notificationId = _getActivityNotificationId(
+        activityName,
+        endTime,
+        minutes,
+      );
+
+      final body = '[$courseName] $activityName\n⏰ 还有 $minutes 分钟结束，请尽快完成！';
+
+      final androidDetails = AndroidNotificationDetails(
+        _activityChannelId,
+        _activityChannelName,
+        channelDescription: _activityChannelDescription,
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        icon: '@mipmap/ic_launcher',
+        styleInformation: BigTextStyleInformation(body),
+      );
+
+      const darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      );
+
+      final details = NotificationDetails(
+        android: androidDetails,
+        iOS: darwinDetails,
+      );
+
+      // 根据活动类型选择图标
+      String typeEmoji;
+      switch (activityType) {
+        case '签到':
+          typeEmoji = '📍';
+          break;
+        case '测验':
+        case '随堂练习':
+          typeEmoji = '📝';
+          break;
+        case '分组任务':
+          typeEmoji = '👥';
+          break;
+        default:
+          typeEmoji = '⚡';
+      }
+
+      await _notifications.zonedSchedule(
+        notificationId,
+        '$typeEmoji $activityType即将结束',
+        body,
+        tz.TZDateTime.from(notifyTime, tz.local),
+        details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        payload: 'activity_${activityId ?? activityName}',
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+
+      debugPrint(
+        '已安排活动通知: $activityName, '
+        '提前$minutes分钟, '
+        '通知时间: $notifyTime',
+      );
+    }
+  }
+
+  /// 生成活动通知ID
+  int _getActivityNotificationId(
+    String activityName,
+    DateTime endTime,
+    int minutesBefore,
+  ) {
+    final key =
+        'activity_${activityName}_${endTime.millisecondsSinceEpoch}_$minutesBefore';
+    return key.hashCode.abs() % 100000 + 10000;
+  }
+
+  /// 为活动列表批量安排通知
+  Future<void> scheduleActivitiesNotifications({
+    required List<Map<String, dynamic>> activities,
+  }) async {
+    for (final activity in activities) {
+      try {
+        await scheduleActivityNotification(
+          activityName: activity['name'] as String,
+          courseName: activity['courseName'] as String,
+          activityType: activity['type'] as String,
+          endTime: activity['endTime'] as DateTime,
+          activityId: activity['id'] as String?,
+        );
+      } catch (e) {
+        debugPrint('安排活动通知失败: ${activity['name']}, $e');
+      }
+    }
+  }
+
+  /// 清除特定活动的所有通知
+  Future<void> cancelActivityNotifications(
+    String activityName,
+    DateTime endTime,
+  ) async {
+    // 尝试清除所有可能的通知ID
+    for (final minutes in [30, 15, 5]) {
+      final id = _getActivityNotificationId(activityName, endTime, minutes);
+      await cancelNotification(id);
+    }
+    debugPrint('已清除活动通知: $activityName');
   }
 
   /// 为活动立即显示通知（活动即将在很短时间内结束时使用）

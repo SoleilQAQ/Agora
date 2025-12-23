@@ -239,6 +239,9 @@ class DataManager extends ChangeNotifier {
   Future<void> loadSchedule({bool forceRefresh = false, String? xnxq}) async {
     if (_scheduleState == LoadingState.loading) return;
 
+    // 检查是否为学习通模式
+    final skipJwxtLogin = await AuthStorage.getSkipJwxtLogin();
+
     // 非强制刷新且没有指定学期时，先尝试从缓存加载
     if (!forceRefresh && xnxq == null) {
       if (_schedule != null) return; // 内存中已有数据
@@ -247,6 +250,22 @@ class DataManager extends ChangeNotifier {
       final cacheLoaded = await _loadScheduleFromCache();
       if (cacheLoaded && _schedule != null) {
         _scheduleState = LoadingState.loaded;
+        notifyListeners();
+        return;
+      }
+    }
+
+    // 学习通模式下，不进行网络请求，只从缓存加载
+    if (skipJwxtLogin) {
+      final cacheLoaded = await _loadScheduleFromCache();
+      if (cacheLoaded && _schedule != null) {
+        _scheduleState = LoadingState.loaded;
+        notifyListeners();
+        return;
+      } else {
+        // 缓存加载失败，设置为空状态（不是错误状态）
+        _schedule = null;
+        _scheduleState = LoadingState.loaded; // 设置为loaded而不是error
         notifyListeners();
         return;
       }

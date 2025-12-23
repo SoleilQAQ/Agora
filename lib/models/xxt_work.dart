@@ -60,13 +60,17 @@ class XxtWork {
   static bool _checkIsOverdue(String remainingTime) {
     final lowerTime = remainingTime.toLowerCase();
 
+    // 特殊情况：未设置截止时间不算超时
+    if (lowerTime.contains('未设置') || lowerTime.contains('无截止')) {
+      return false;
+    }
+
     // 检查关键词
     if (lowerTime.contains('已超时') ||
         lowerTime.contains('已截止') ||
         lowerTime.contains('已过期') ||
         lowerTime.contains('超时') ||
         lowerTime.contains('过期') ||
-        lowerTime.contains('截止') ||
         lowerTime.contains('逾期') ||
         lowerTime.contains('expired') ||
         lowerTime.contains('overdue')) {

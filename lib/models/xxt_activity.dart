@@ -131,6 +131,9 @@ class XxtActivity {
   /// 签到子类型（仅签到活动）：0=拍照, 2=二维码, 3=手势, 4=位置, 5=密码
   final String? otherId;
 
+  /// 签退信息（仅签到活动，如果有签退则不为null）
+  final bool hasSignOut;
+
   const XxtActivity({
     required this.type,
     required this.name,
@@ -141,6 +144,7 @@ class XxtActivity {
     this.endTime,
     this.status = XxtActivityStatus.unknown,
     this.otherId,
+    this.hasSignOut = false,
   });
 
   /// 从解析的数据创建
@@ -257,6 +261,7 @@ class XxtActivity {
     DateTime? endTime,
     XxtActivityStatus? status,
     String? otherId,
+    bool? hasSignOut,
   }) {
     return XxtActivity(
       type: type ?? this.type,
@@ -268,6 +273,7 @@ class XxtActivity {
       endTime: endTime ?? this.endTime,
       status: status ?? this.status,
       otherId: otherId ?? this.otherId,
+      hasSignOut: hasSignOut ?? this.hasSignOut,
     );
   }
 
@@ -306,7 +312,16 @@ class XxtActivity {
   }
 
   /// 是否已过期
-  bool get isExpired => endTime != null && DateTime.now().isAfter(endTime!);
+  /// 对于有签退的签到活动，永不自动过期（需要用户手动确认）
+  bool get isExpired {
+    // 如果有签退信息，永不自动过期
+    // 用户需要在签到页面手动确认已完成签退，才会从列表中移除
+    if (hasSignOut) {
+      return false;
+    }
+
+    return endTime != null && DateTime.now().isAfter(endTime!);
+  }
 
   /// 是否即将过期（30分钟内）
   bool get isUrgent {
@@ -347,6 +362,7 @@ class XxtActivity {
       'endTime': endTime?.toIso8601String(),
       'otherId': otherId,
       'status': status.index,
+      'hasSignOut': hasSignOut,
     };
   }
 
@@ -368,6 +384,7 @@ class XxtActivity {
       status: json['status'] != null
           ? XxtActivityStatus.values[json['status'] as int]
           : XxtActivityStatus.unknown,
+      hasSignOut: json['hasSignOut'] as bool? ?? false,
     );
   }
 

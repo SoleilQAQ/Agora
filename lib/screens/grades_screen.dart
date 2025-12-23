@@ -303,43 +303,55 @@ class _GradesScreenState extends State<GradesScreen>
   }
 
   Widget _buildEmptyState(ThemeData theme, ColorScheme colorScheme) {
-    return Card(
-      elevation: 0,
-      color: colorScheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          children: [
-            Icon(
-              Icons.school_outlined,
-              size: 64,
-              color: colorScheme.onSurfaceVariant,
+    return FutureBuilder<bool>(
+      future: AuthStorage.getSkipJwxtLogin(),
+      builder: (context, snapshot) {
+        final skipJwxtLogin = snapshot.data ?? false;
+
+        return Card(
+          elevation: 0,
+          color: colorScheme.surfaceContainerLow,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.school_outlined,
+                  size: 64,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  skipJwxtLogin ? '仅学习通模式' : '暂无成绩数据',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  skipJwxtLogin ? '登录教务系统后可查看成绩' : '成绩数据可能还未录入',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (!skipJwxtLogin) ...[
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: () =>
+                        widget.dataManager.loadGrades(forceRefresh: true),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('刷新'),
+                  ),
+                ],
+              ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              '暂无成绩数据',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: colorScheme.onSurface,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '成绩数据可能还未录入',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () =>
-                  widget.dataManager.loadGrades(forceRefresh: true),
-              icon: const Icon(Icons.refresh),
-              label: const Text('刷新'),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -453,7 +465,7 @@ class _GradesScreenState extends State<GradesScreen>
                   theme,
                   colorScheme,
                   '平均分',
-                  overallAvgScore?.toStringAsFixed(1) ?? '--',
+                  overallAvgScore?.toStringAsFixed(0) ?? '--',
                 ),
                 _buildOverallStatItem(
                   theme,
@@ -465,13 +477,13 @@ class _GradesScreenState extends State<GradesScreen>
                   theme,
                   colorScheme,
                   '总学分',
-                  totalCredits.toStringAsFixed(1),
+                  totalCredits.toStringAsFixed(0),
                 ),
                 _buildOverallStatItem(
                   theme,
                   colorScheme,
                   '已获学分',
-                  earnedCredits.toStringAsFixed(1),
+                  earnedCredits.toStringAsFixed(0),
                 ),
               ],
             ),
@@ -555,7 +567,7 @@ class _GradesScreenState extends State<GradesScreen>
                     ],
                   ),
                 ),
-                // GPA 进度圆环
+                // GPA 进度圆环（满分 5.0）
                 SizedBox(
                   width: 80,
                   height: 80,
@@ -563,7 +575,7 @@ class _GradesScreenState extends State<GradesScreen>
                     alignment: Alignment.center,
                     children: [
                       CircularProgressIndicator(
-                        value: (avgGpa ?? 0) / 4.0,
+                        value: (avgGpa ?? 0) / 5.0,
                         strokeWidth: 8,
                         backgroundColor: colorScheme.outline.withValues(
                           alpha: 0.2,
@@ -574,7 +586,7 @@ class _GradesScreenState extends State<GradesScreen>
                         strokeCap: StrokeCap.round,
                       ),
                       Text(
-                        '${((avgGpa ?? 0) / 4.0 * 100).toInt()}%',
+                        '${((avgGpa ?? 0) / 5.0 * 100).toInt()}%',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                           color: colorScheme.primary,
@@ -594,37 +606,29 @@ class _GradesScreenState extends State<GradesScreen>
                   colorScheme,
                   Icons.grade_outlined,
                   '平均分',
-                  avgScore?.toStringAsFixed(1) ?? '--',
+                  avgScore?.toStringAsFixed(0) ?? '--',
                 ),
                 _buildStatItem(
                   theme,
                   colorScheme,
                   Icons.school_outlined,
                   '总学分',
-                  totalCredits.toStringAsFixed(1),
+                  totalCredits.toStringAsFixed(0),
                 ),
                 _buildStatItem(
                   theme,
                   colorScheme,
                   Icons.check_circle_outline,
                   '已获学分',
-                  earnedCredits.toStringAsFixed(1),
+                  earnedCredits.toStringAsFixed(0),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // 统计数据行（第二行）
-            Row(
-              children: [
                 _buildStatItem(
                   theme,
                   colorScheme,
-                  Icons.trending_up,
+                  Icons.check_circle_outline,
                   '通过率',
                   '${(passRate * 100).toInt()}%',
                 ),
-                const Expanded(child: SizedBox()), // 占位
-                const Expanded(child: SizedBox()), // 占位
               ],
             ),
           ],
