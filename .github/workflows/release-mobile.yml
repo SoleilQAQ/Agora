@@ -8,17 +8,12 @@ name: Release Mobile (Android + iOS)
     branches: [master]
   workflow_dispatch:
     inputs:
-      publish_release:
-        description: "Also publish GitHub Release"
-        required: true
-        type: boolean
-        default: false
       tag:
-        description: "Tag name to publish (e.g., v1.2.3). Required if publish_release=true on manual run."
+        description: "Release tag (e.g., v1.2.3). Leave empty to use pubspec.yaml version -> vX.Y.Z"
         required: false
         type: string
       create_tag:
-        description: "Create & push the tag from current commit (manual run only)"
+        description: "Create & push the tag on manual run"
         required: true
         type: boolean
         default: false
@@ -36,7 +31,7 @@ jobs:
 
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }} # legacy compatible
+      KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -77,9 +72,10 @@ jobs:
             exit 1
           fi
 
+          # decode keystore to android/app/keystore.jks
           echo "$B64" | base64 --decode > keystore.jks
 
-          # 常见 Flutter/Kotlin 签名读取方式：rootProject.file("key.properties")
+          # 常见读取方式：rootProject.file("key.properties")
           cat > ../key.properties <<EOF
           storeFile=keystore.jks
           storePassword=${KEYSTORE_PASSWORD}
@@ -88,13 +84,12 @@ jobs:
           EOF
 
           echo "Generated android/key.properties"
-          ls -al .
 
       - name: Build APK (debug for PR)
         if: github.event_name == 'pull_request'
         run: flutter build apk --debug
 
-      - name: Build APK (release for push/tag)
+      - name: Build APK (release for push/tag/manual)
         if: github.event_name != 'pull_request'
         run: flutter build apk --release
 
@@ -103,8 +98,7 @@ jobs:
         with:
           name: android-apk
           if-no-files-found: error
-          path: |
-            build/app/outputs/flutter-apk/*.apk
+          path: build/app/outputs/flutter-apk/*.apk
 
   ios:
     name: Build iOS IPA (unsigned)
@@ -163,9 +157,7 @@ jobs:
     permissions:
       contents: write
 
-    if: |
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
@@ -177,28 +169,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TAG="${{ inputs.tag }}"
             if [[ -z "$TAG" ]]; then
-              echo "::error::inputs.tag is required when publish_release=true (e.g., v1.2.3)."
-              exit 1
+              # 从 pubspec.yaml 自动读版本：version: 1.2.3+4 -> v1.2.3
+              VER="$(grep -E '^version:\s*' pubspec.yaml | head -n1 | awk '{print $2}' | cut -d+ -f1)"
+              if [[ -z "$VER" ]]; then
+                echo "::error::Cannot read version from pubspec.yaml (missing 'version: x.y.z')"
+                exit 1
+              fi
+              TAG="v${VER}"
             fi
           else
             TAG="${{ github.ref_name }}"
           fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Using tag: $TAG"
 
       - name: Create & push tag (manual run only)
         if: github.event_name == 'workflow_dispatch' && inputs.create_tag
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.vars.outputs.tag }}"
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::Missing RELEASE_TOKEN secret. Create a PAT with repo/contents write and set as RELEASE_TOKEN."
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git tag -a "$TAG" -m "$TAG" || true
-          git push origin "$TAG"
+          git push origin "$TAG" || true
 
       - name: Download Android artifact
         uses: actions/download-artifact@v4
@@ -237,12 +245,79 @@ jobs:
 
           ls -al dist/out
 
+      - name: Generate Release Notes (inline; no "Full Changelog:")
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.vars.outputs.tag }}"
+          git fetch --tags --force
+
+          PREV_TAG="$(git tag -l 'v*' --sort=-version:refname | grep -vx "$TAG" | head -n 1 || true)"
+
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="${PREV_TAG}..HEAD"
+            COMPARE_URL="${{ github.server_url }}/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+          else
+            RANGE="HEAD"
+            COMPARE_URL=""
+          fi
+
+          OUT="dist/release_notes.md"
+          mkdir -p dist
+
+          echo "# ${TAG}" > "$OUT"
+          echo "" >> "$OUT"
+
+          if [[ -n "$PREV_TAG" ]]; then
+            echo "**Changes since ${PREV_TAG}:**" >> "$OUT"
+          else
+            echo "**Changes:**" >> "$OUT"
+          fi
+          echo "" >> "$OUT"
+
+          COMMITS="$(git log --no-merges --pretty=format:'%s (%h)' $RANGE || true)"
+
+          feat="$(echo "$COMMITS" | grep -E '^(feat|feature)(\(.+\))?:' || true)"
+          fix="$(echo "$COMMITS" | grep -E '^fix(\(.+\))?:' || true)"
+          docs="$(echo "$COMMITS" | grep -E '^docs(\(.+\))?:' || true)"
+          chore="$(echo "$COMMITS" | grep -E '^(chore|refactor|perf|test|build|ci|style)(\(.+\))?:' || true)"
+          other="$(echo "$COMMITS" | grep -Ev '^(feat|feature|fix|docs|chore|refactor|perf|test|build|ci|style)(\(.+\))?:' || true)"
+
+          add_section () {
+            local title="$1"
+            local body="$2"
+            if [[ -n "${body//$'\n'/}" ]]; then
+              echo "## ${title}" >> "$OUT"
+              echo "" >> "$OUT"
+              echo "$body" \
+                | sed -E 's/^(feat|feature|fix|docs|chore|refactor|perf|test|build|ci|style)(\(.+\))?:\s*/- /' \
+                | sed -E 's/^/- /' >> "$OUT"
+              echo "" >> "$OUT"
+            fi
+          }
+
+          add_section "✨ Features" "$feat"
+          add_section "🐛 Fixes" "$fix"
+          add_section "📚 Docs" "$docs"
+          add_section "🧰 Chore / Refactor" "$chore"
+          add_section "🔎 Other" "$other"
+
+          if [[ -n "$COMPARE_URL" ]]; then
+            echo "---" >> "$OUT"
+            echo "Compare: ${COMPARE_URL}" >> "$OUT"
+          fi
+
+          echo "Generated $OUT"
+          sed -n '1,160p' "$OUT"
+
       - name: Create/Update Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
           tag_name: ${{ steps.vars.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          generate_release_notes: true
+          body_path: dist/release_notes.md
+          generate_release_notes: false
           files: |
             dist/out/Agora-android-${{ steps.vars.outputs.tag }}.apk
             dist/out/Agora-ios-unsigned-${{ steps.vars.outputs.tag }}.ipa
