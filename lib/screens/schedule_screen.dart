@@ -2282,7 +2282,12 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                                   theme,
                                   colorScheme,
                                   editingSettings,
-                                  setModalState,
+                                  (newSettings) {
+                                    // 回调更新父弹窗的设置
+                                    setModalState(() {
+                                      editingSettings = newSettings;
+                                    });
+                                  },
                                 );
                               },
                             ),
@@ -2326,223 +2331,236 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     BuildContext parentContext,
     ThemeData theme,
     ColorScheme colorScheme,
-    ScheduleSettings editingSettings,
-    StateSetter parentSetState,
+    ScheduleSettings initialSettings,
+    void Function(ScheduleSettings) onSettingsChanged,
   ) {
+    // 在子弹窗中维护自己的设置副本
+    var editingSettings = initialSettings;
+    
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       showDragHandle: false,
       builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Container(
-          height: MediaQuery.of(context).size.height * 0.85,
-          decoration: BoxDecoration(
-            color: colorScheme.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          child: Column(
-            children: [
-              // 拖拽指示器
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 8),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: colorScheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
+        builder: (context, setModalState) {
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.85,
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+            child: Column(
+              children: [
+                // 拖拽指示器
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-              ),
-              // 标题栏
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    Expanded(
-                      child: Text(
-                        '课程时间设置',
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
+                // 标题栏
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => Navigator.pop(context),
                       ),
-                    ),
-                    const SizedBox(width: 48), // 占位保持标题居中
-                  ],
-                ),
-              ),
-              const Divider(),
-              // 设置列表
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: [
-                    const SizedBox(height: 8),
-                    // 时间设置区
-                    _buildSettingsSection(
-                      theme,
-                      colorScheme,
-                      '开始时间',
-                      Icons.access_time_rounded,
-                      [
-                        _buildTimeSettingItem(
-                          theme,
-                          colorScheme,
-                          '上午开始',
-                          editingSettings.morningStartTime,
-                          (time) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                morningStartTime: time,
-                              );
-                            });
-                          },
+                      Expanded(
+                        child: Text(
+                          '课程时间设置',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
-                        _buildTimeSettingItem(
-                          theme,
-                          colorScheme,
-                          '下午开始',
-                          editingSettings.afternoonStartTime,
-                          (time) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                afternoonStartTime: time,
-                              );
-                            });
-                          },
-                        ),
-                        _buildTimeSettingItem(
-                          theme,
-                          colorScheme,
-                          '晚上开始',
-                          editingSettings.eveningStartTime,
-                          (time) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                eveningStartTime: time,
-                              );
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // 课时设置区
-                    _buildSettingsSection(
-                      theme,
-                      colorScheme,
-                      '课时长度',
-                      Icons.timer_rounded,
-                      [
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '每节课时长',
-                          editingSettings.classDuration,
-                          30,
-                          60,
-                          (value) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                classDuration: value,
-                              );
-                            });
-                          },
-                          suffix: '分钟',
-                        ),
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '小课间',
-                          editingSettings.shortBreak,
-                          0,
-                          20,
-                          (value) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                shortBreak: value,
-                              );
-                            });
-                          },
-                          suffix: '分钟',
-                        ),
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '大课间',
-                          editingSettings.longBreak,
-                          10,
-                          40,
-                          (value) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                longBreak: value,
-                              );
-                            });
-                          },
-                          suffix: '分钟',
-                        ),
-                        _buildNumberSettingItem(
-                          theme,
-                          colorScheme,
-                          '大课间间隔',
-                          editingSettings.longBreakInterval,
-                          1,
-                          4,
-                          (value) {
-                            parentSetState(() {
-                              editingSettings = editingSettings.copyWith(
-                                longBreakInterval: value,
-                              );
-                            });
-                          },
-                          suffix: '节课',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // 提示信息
-                    Card(
-                      elevation: 0,
-                      color: colorScheme.primaryContainer.withValues(
-                        alpha: 0.3,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.info_outline,
-                              size: 20,
-                              color: colorScheme.primary,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                '设置会自动生成时间表，如需精确调整请使用"编辑详细时间表"',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurface,
+                      // 确认按钮
+                      TextButton(
+                        onPressed: () {
+                          // 将设置同步回父弹窗
+                          onSettingsChanged(editingSettings);
+                          Navigator.pop(context);
+                        },
+                        child: const Text('确定'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                // 设置列表
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    children: [
+                      const SizedBox(height: 8),
+                      // 时间设置区
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '开始时间',
+                        Icons.access_time_rounded,
+                        [
+                          _buildTimeSettingItem(
+                            theme,
+                            colorScheme,
+                            '上午开始',
+                            editingSettings.morningStartTime,
+                            (time) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  morningStartTime: time,
+                                );
+                              });
+                            },
+                          ),
+                          _buildTimeSettingItem(
+                            theme,
+                            colorScheme,
+                            '下午开始',
+                            editingSettings.afternoonStartTime,
+                            (time) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  afternoonStartTime: time,
+                                );
+                              });
+                            },
+                          ),
+                          _buildTimeSettingItem(
+                            theme,
+                            colorScheme,
+                            '晚上开始',
+                            editingSettings.eveningStartTime,
+                            (time) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  eveningStartTime: time,
+                                );
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 课时设置区
+                      _buildSettingsSection(
+                        theme,
+                        colorScheme,
+                        '课时长度',
+                        Icons.timer_rounded,
+                        [
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '每节课时长',
+                            editingSettings.classDuration,
+                            30,
+                            60,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  classDuration: value,
+                                );
+                              });
+                            },
+                            suffix: '分钟',
+                          ),
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '小课间',
+                            editingSettings.shortBreak,
+                            0,
+                            20,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  shortBreak: value,
+                                );
+                              });
+                            },
+                            suffix: '分钟',
+                          ),
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '大课间',
+                            editingSettings.longBreak,
+                            10,
+                            40,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  longBreak: value,
+                                );
+                              });
+                            },
+                            suffix: '分钟',
+                          ),
+                          _buildNumberSettingItem(
+                            theme,
+                            colorScheme,
+                            '大课间间隔',
+                            editingSettings.longBreakInterval,
+                            1,
+                            4,
+                            (value) {
+                              setModalState(() {
+                                editingSettings = editingSettings.copyWith(
+                                  longBreakInterval: value,
+                                );
+                              });
+                            },
+                            suffix: '节课',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // 提示信息
+                      Card(
+                        elevation: 0,
+                        color: colorScheme.primaryContainer.withValues(
+                          alpha: 0.3,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.info_outline,
+                                size: 20,
+                                color: colorScheme.primary,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  '设置会自动生成时间表，如需精确调整请使用"编辑详细时间表"',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 32),
-                  ],
+                      const SizedBox(height: 32),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

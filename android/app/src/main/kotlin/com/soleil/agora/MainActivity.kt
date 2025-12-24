@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val CHANNEL = "com.soleil.agora/update"
+        private const val FILE_SAVER_CHANNEL = "com.soleil.agora/file_saver"
         private const val STORAGE_PERMISSION_CODE = 100
         private const val NOTIFICATION_PERMISSION_CODE = 101
         private const val DOWNLOAD_FOLDER_NAME = "Agora"
@@ -165,6 +166,31 @@ class MainActivity : FlutterActivity() {
                         completedFilePath = null
                     } else {
                         result.success(null)
+                    }
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        // 文件保存 Channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_SAVER_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "saveToDownloads" -> {
+                    val filename = call.argument<String>("filename")
+                    val content = call.argument<String>("content")
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    
+                    if (filename != null && content != null) {
+                        val savedPath = saveFileToDownloads(filename, content, mimeType)
+                        if (savedPath != null) {
+                            result.success(savedPath)
+                        } else {
+                            result.error("SAVE_FAILED", "保存文件失败", null)
+                        }
+                    } else {
+                        result.error("INVALID_ARGUMENT", "filename and content are required", null)
                     }
                 }
                 else -> {
@@ -779,5 +805,81 @@ class MainActivity : FlutterActivity() {
             Log.e(TAG, "清理 APK 文件失败", e)
             false
         }
+    }
+
+    /**
+     * 保存文件到公共下载目录
+     * 使用 MediaStore API (Android 10+) 或直接写入 (Android 9-)
+     * 
+     * @param filename 文件名
+     * @param content 文件内容
+     * @param mimeType MIME 类型
+     * @return 保存成功返回文件路径，失败返回 null
+     */
+    private fun saveFileToDownloads(filename: String, content: String, mimeType: String): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ 使用 MediaStore API
+                saveFileWithMediaStore(filename, content, mimeType)
+            } else {
+                // Android 9 及以下直接写入公共下载目录
+                saveFileLegacy(filename, content)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "保存文件失败", e)
+            null
+        }
+    }
+
+    /**
+     * Android 10+ 使用 MediaStore API 保存文件
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun saveFileWithMediaStore(filename: String, content: String, mimeType: String): String? {
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeType)
+            put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+        }
+
+        val resolver = contentResolver
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            ?: return null
+
+        return try {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                outputStream.write(content.toByteArray(Charsets.UTF_8))
+            }
+
+            contentValues.clear()
+            contentValues.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+
+            // 获取实际文件路径
+            val path = "Download/$filename"
+            Log.d(TAG, "文件已保存到: $path")
+            path
+        } catch (e: Exception) {
+            // 保存失败，删除已创建的条目
+            resolver.delete(uri, null, null)
+            Log.e(TAG, "MediaStore 保存失败", e)
+            null
+        }
+    }
+
+    /**
+     * Android 9 及以下直接写入公共下载目录
+     */
+    private fun saveFileLegacy(filename: String, content: String): String? {
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!downloadDir.exists()) {
+            downloadDir.mkdirs()
+        }
+
+        val file = File(downloadDir, filename)
+        file.writeText(content, Charsets.UTF_8)
+        
+        Log.d(TAG, "文件已保存到: ${file.absolutePath}")
+        return file.absolutePath
     }
 }

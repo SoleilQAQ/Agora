@@ -197,7 +197,7 @@ def main():
     print("\n⏳ 登录中...")
     try:
         headers = login(session, phone, pwd)
-        print("✅ 登录成功")
+        print("登录成功")
     except Exception as e:
         print(f"❌ {e}")
         return
@@ -218,7 +218,7 @@ def main():
                 results.append(r)
     
     elapsed = time.time() - start
-    print(f"✅ 完成，耗时 {elapsed:.1f} 秒")
+    print(f"完成，耗时 {elapsed:.1f} 秒")
     
     # 输出结果
     print("\n" + "=" * 50)
@@ -244,7 +244,7 @@ def main():
                 time_str = f" ⏰ {act['time']}" if act.get('time') else ''
                 print(f"   ⚡ [{act['type']}] {act['name'][:40]}{status_str}{time_str}")
     else:
-        print("✅ 太棒了！没有进行中的活动！")
+        print("太棒了！没有进行中的活动！")
     print("=" * 50)
 
 

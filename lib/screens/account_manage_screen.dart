@@ -521,9 +521,14 @@ class _AccountManageScreenState extends State<AccountManageScreen> {
               ),
             );
 
-            // 如果修改的是当前活跃账号且添加了教务系统账号,提示用户重新登录
+            // 如果修改的是当前活跃账号且添加了教务系统账号,延迟显示重新登录提示
+            // 等待表单弹窗关闭后再显示
             if (account.isActive && isLocalUser && hasJwxtCredentials) {
-              _showReloginPrompt();
+              Future.delayed(const Duration(milliseconds: 300), () {
+                if (mounted) {
+                  _showReloginPrompt();
+                }
+              });
             }
           }
         },
@@ -537,20 +542,18 @@ class _AccountManageScreenState extends State<AccountManageScreen> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      barrierDismissible: false, // 防止点击外部关闭
+      builder: (dialogContext) => AlertDialog(
         icon: Icon(Icons.info_outline, color: colorScheme.primary, size: 32),
         title: const Text('需要重新登录'),
-        content: const Text('您已添加教务系统账号,需要重新登录以启用完整功能。'),
+        content: const Text('您已添加教务系统账号，需要重新登录以启用完整功能。\n\n点击"立即登录"将自动使用新账号登录。'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('稍后'),
-          ),
           FilledButton(
             onPressed: () {
-              Navigator.pop(context); // 关闭对话框
+              Navigator.pop(dialogContext); // 关闭对话框
+              // 触发重新登录（回调中会关闭账号管理页面）
               if (widget.onAccountSwitch != null) {
-                widget.onAccountSwitch!(); // 触发重新登录
+                widget.onAccountSwitch!();
               }
             },
             child: const Text('立即登录'),

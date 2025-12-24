@@ -24,53 +24,6 @@ class _GradesScreenState extends State<GradesScreen>
   @override
   bool get wantKeepAlive => false; // 禁用以减少内存占用
 
-  /// 计算所有学期的总平均成绩（加权平均）
-  double? _calculateOverallAverageScore(List<SemesterGrades> allGrades) {
-    var totalScore = 0.0;
-    var totalCredits = 0.0;
-
-    for (final semesterGrades in allGrades) {
-      for (final grade in semesterGrades.grades) {
-        final numScore = double.tryParse(grade.score);
-        if (numScore != null) {
-          totalScore += numScore * grade.credit;
-          totalCredits += grade.credit;
-        }
-      }
-    }
-
-    return totalCredits > 0 ? totalScore / totalCredits : null;
-  }
-
-  /// 计算所有学期的总平均绩点（加权平均）
-  /// 只计算及格课程的绩点
-  double? _calculateOverallAverageGpa(List<SemesterGrades> allGrades) {
-    var totalPoints = 0.0;
-    var totalCredits = 0.0;
-
-    for (final semesterGrades in allGrades) {
-      for (final grade in semesterGrades.grades) {
-        // 只计算有绩点且及格的课程
-        if (grade.gpa != null && grade.isPassed) {
-          totalPoints += grade.gpa! * grade.credit;
-          totalCredits += grade.credit;
-        }
-      }
-    }
-
-    return totalCredits > 0 ? totalPoints / totalCredits : null;
-  }
-
-  /// 计算所有学期的总学分
-  double _calculateTotalCredits(List<SemesterGrades> allGrades) {
-    return allGrades.fold(0.0, (sum, sg) => sum + sg.totalCredits);
-  }
-
-  /// 计算所有学期的已获学分
-  double _calculateEarnedCredits(List<SemesterGrades> allGrades) {
-    return allGrades.fold(0.0, (sum, sg) => sum + sg.earnedCredits);
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -407,10 +360,11 @@ class _GradesScreenState extends State<GradesScreen>
     ColorScheme colorScheme,
     List<SemesterGrades> allGrades,
   ) {
-    final overallAvgScore = _calculateOverallAverageScore(allGrades);
-    final overallAvgGpa = _calculateOverallAverageGpa(allGrades);
-    final totalCredits = _calculateTotalCredits(allGrades);
-    final earnedCredits = _calculateEarnedCredits(allGrades);
+    // 使用 DataManager 的方法保持一致性
+    final overallAvgScore = widget.dataManager.calculateOverallAverageScore();
+    final overallAvgGpa = widget.dataManager.calculateOverallGpa();
+    final totalCredits = widget.dataManager.calculateTotalCredits();
+    final earnedCredits = allGrades.fold(0.0, (sum, sg) => sum + sg.earnedCredits);
 
     return Card(
       elevation: 0,
@@ -465,7 +419,7 @@ class _GradesScreenState extends State<GradesScreen>
                   theme,
                   colorScheme,
                   '平均分',
-                  overallAvgScore?.toStringAsFixed(0) ?? '--',
+                  overallAvgScore?.toStringAsFixed(1) ?? '--',
                 ),
                 _buildOverallStatItem(
                   theme,

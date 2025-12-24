@@ -74,6 +74,7 @@ dependencies:
 
   # 文件选择器
   file_picker: ^8.1.6
+  file_selector: ^1.0.3
 
   # 分享功能
   share_plus: ^10.1.3
@@ -96,6 +97,7 @@ dependencies:
   # Markdown 渲染（更新日志显示）
   flutter_markdown: ^0.7.6
   image_picker: ^1.2.1
+  saver_gallery: ^4.1.0
 
 dev_dependencies:
   flutter_test:

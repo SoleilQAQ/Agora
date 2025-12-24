@@ -233,8 +233,8 @@ class AuthStorage {
     morningSections: 4,
     afternoonSections: 4,
     eveningSections: 4,
-    classDuration: 45,
-    shortBreak: 0,
+    classDuration: 40,
+    shortBreak: 10,
     longBreak: 20,
     longBreakInterval: 2, // 每2节课一次大课间
     showNonCurrentWeekCourses: false, // 默认不显示非本周课程
