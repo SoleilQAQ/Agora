@@ -48,6 +48,8 @@ class ScheduleImportExportService {
         label: 'JSON',
         extensions: const ['json'],
         mimeTypes: const ['application/json', 'text/json', 'text/plain'],
+        // iOS 需要 uniformTypeIdentifiers
+        uniformTypeIdentifiers: const ['public.json', 'public.text', 'public.plain-text'],
       );
 
       final XFile? xfile = await openFile(acceptedTypeGroups: [typeGroup]);
@@ -164,15 +166,23 @@ class ScheduleImportExportService {
   /// 用户可以在分享菜单中选择"存储到文件"来保存到任意位置
   static Future<(bool, String?)> _saveViaShareIOS(String filename, String content) async {
     try {
-      // 先保存到临时目录
-      final directory = await getTemporaryDirectory();
+      // 先保存到应用文档目录（比临时目录更稳定）
+      final directory = await getApplicationDocumentsDirectory();
       final filePath = '${directory.path}/$filename';
       final file = File(filePath);
       await file.writeAsString(content, flush: true);
       
-      // 使用分享功能，用户可以选择"存储到文件"
+      // 确保文件写入成功
+      if (!await file.exists()) {
+        debugPrint('iOS 文件写入失败');
+        return (false, null);
+      }
+      
+      // 使用分享功能，指定 MIME 类型
+      final xFile = XFile(filePath, mimeType: 'application/json');
       final result = await Share.shareXFiles(
-        [XFile(filePath)],
+        [xFile],
+        subject: '课表数据',
       );
       
       // 检查分享结果
@@ -217,7 +227,10 @@ class ScheduleImportExportService {
   static Future<bool> shareScheduleFile(Schedule schedule) async {
     try {
       final jsonString = exportToJson(schedule);
-      final directory = await getTemporaryDirectory();
+      // iOS 使用应用文档目录更稳定，Android 使用临时目录
+      final directory = Platform.isIOS 
+          ? await getApplicationDocumentsDirectory()
+          : await getTemporaryDirectory();
       // 使用纯英文文件名避免兼容性问题
       final now = DateTime.now();
       final dateStr = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
@@ -227,9 +240,17 @@ class ScheduleImportExportService {
       final file = File(filePath);
       await file.writeAsString(jsonString, flush: true);
 
-      // 使用 shareXFiles 分享文件
+      // 确保文件写入成功
+      if (!await file.exists()) {
+        debugPrint('文件写入失败');
+        return false;
+      }
+
+      // 使用 shareXFiles 分享文件，指定 MIME 类型
+      final xFile = XFile(filePath, mimeType: 'application/json');
       await Share.shareXFiles(
-        [XFile(filePath)],
+        [xFile],
+        subject: '课表数据',
       );
 
       debugPrint('课表文件分享成功');
