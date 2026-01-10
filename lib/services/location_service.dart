@@ -164,7 +164,7 @@ class LocationCityResult {
 /// 定位服务
 /// 负责获取用户当前位置并转换为城市信息
 class LocationService {
-  static const String _baseUrl = 'http://47.122.112.62:8000';
+  static const String _baseUrl = 'https://agora.byteflow.asia';
   static const Duration _locationTimeout = Duration(seconds: 15);
 
   Dio? _dio;

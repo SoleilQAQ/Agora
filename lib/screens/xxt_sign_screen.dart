@@ -55,7 +55,7 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
 
   // 拍照签到
   Uint8List? _photoData;
-  bool _isUploadingPhoto = false;
+  final bool _isUploadingPhoto = false;
 
   // 已签到状态
   @override
@@ -822,7 +822,7 @@ class _XxtSignScreenState extends State<XxtSignScreen> {
             color: colorScheme.surface,
             boxShadow: [
               BoxShadow(
-                color: colorScheme.shadow.withOpacity(0.1),
+                color: colorScheme.shadow.withValues(alpha: 0.1),
                 blurRadius: 8,
                 offset: const Offset(0, -2),
               ),

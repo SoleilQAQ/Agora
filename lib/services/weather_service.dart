@@ -289,7 +289,7 @@ class WeatherResult {
 
 /// 天气服务
 class WeatherService {
-  static const String _baseUrl = 'http://47.122.112.62:8000';
+  static const String _baseUrl = 'https://agora.byteflow.asia';
 
   Dio? _dio;
   LocationService? _locationService;
@@ -518,7 +518,7 @@ class ChinaRegionData {
       _rawData = jsonData.cast<Map<String, dynamic>>();
       _parseRegionData();
     } catch (e) {
-      print('加载城市数据失败: $e');
+      debugPrint('加载城市数据失败: $e');
       _regionData = {};
     } finally {
       _isLoading = false;
