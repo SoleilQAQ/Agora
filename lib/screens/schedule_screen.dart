@@ -82,6 +82,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   List<String> _availableSemesters = []; // 可用学期列表（有课程的学期）
   String? _selectedSemester; // 当前选中的学期
   bool _isLoadingSemesters = false; // 是否正在加载学期列表
+  bool _semesterListInitialized = false; // 学期列表是否初始化完成
 
   // 课程表配置
   int _totalSections = 12; // 总节数（动态）
@@ -107,18 +108,27 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     super.initState();
     // 加载课程表设置和时间表
     _loadScheduleSettings();
-    // 加载可用学期列表
-    _loadAvailableSemesters();
-    // 初始化选中周为当前周
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final currentWeek = widget.dataManager.currentWeek;
-      setState(() {
-        _selectedWeek = currentWeek;
-        // 初始化 PageController，设置初始页为当前周
-        _schedulePageController = PageController(initialPage: currentWeek - 1);
+    // 等待学期列表加载完成后再初始化 UI
+    _initializeAfterSemesterLoading();
+  }
+
+  /// 等待学期列表加载完成后初始化 UI
+  Future<void> _initializeAfterSemesterLoading() async {
+    // 加载可用学期列表（会等待筛选完成）
+    await _loadAvailableSemesters();
+    
+    // 学期列表加载完成后，初始化选中周
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final currentWeek = widget.dataManager.currentWeek;
+        setState(() {
+          _selectedWeek = currentWeek;
+          // 初始化 PageController，设置初始页为当前周
+          _schedulePageController = PageController(initialPage: currentWeek - 1);
+        });
+        _scrollToWeek(currentWeek);
       });
-      _scrollToWeek(currentWeek);
-    });
+    }
   }
 
   /// 加载课程表设置和时间表
@@ -142,19 +152,26 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     _checkSemesterStartDate();
   }
 
-  /// 加载可用学期列表（筛选有课程的学期）
+  /// 加载可用学期列表（等待筛选完成后返回）
   Future<void> _loadAvailableSemesters() async {
     // 检查是否为学习通模式，学习通模式下不加载学期列表
     final skipJwxtLogin = await AuthStorage.getSkipJwxtLogin();
-    if (skipJwxtLogin) return;
+    if (skipJwxtLogin) {
+      if (mounted) {
+        setState(() {
+          _semesterListInitialized = true;
+        });
+      }
+      return;
+    }
 
     if (_isLoadingSemesters) return;
 
-    setState(() {
-      _isLoadingSemesters = true;
-    });
-
     try {
+      setState(() {
+        _isLoadingSemesters = true;
+      });
+
       // 获取所有学期列表
       final allSemesters = await widget.dataManager.jwxtService.getAvailableSemesters();
       debugPrint('获取到学期列表: $allSemesters');
@@ -163,40 +180,41 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         if (mounted) {
           setState(() {
             _isLoadingSemesters = false;
+            _semesterListInitialized = true;
           });
         }
         return;
       }
 
-      // 后台异步筛选有课程的学期
-      _filterSemestersWithCourses(allSemesters);
+      // 等待筛选完成
+      await _filterSemestersWithCourses(allSemesters);
 
-      // 先设置当前学期
+      // 筛选完成后设置当前学期
       if (mounted) {
         final currentSchedule = widget.dataManager.schedule;
         setState(() {
-          // 暂时显示所有学期，后台筛选完成后会更新
-          _availableSemesters = allSemesters;
           if (currentSchedule?.semester != null) {
             _selectedSemester = currentSchedule!.semester;
-          } else if (allSemesters.isNotEmpty) {
-            _selectedSemester = allSemesters.first;
+          } else if (_availableSemesters.isNotEmpty) {
+            _selectedSemester = _availableSemesters.first;
           }
           _isLoadingSemesters = false;
+          _semesterListInitialized = true;
         });
-        debugPrint('设置学期列表完成: $_availableSemesters, 当前选中: $_selectedSemester');
+        debugPrint('学期列表加载完成: $_availableSemesters, 当前选中: $_selectedSemester');
       }
     } catch (e) {
       debugPrint('加载学期列表失败: $e');
       if (mounted) {
         setState(() {
           _isLoadingSemesters = false;
+          _semesterListInitialized = true;
         });
       }
     }
   }
 
-  /// 后台筛选有课程的学期
+  /// 后台筛选有课程的学期（等待完成后返回）
   Future<void> _filterSemestersWithCourses(List<String> allSemesters) async {
     final semestersWithCourses = <String>[];
 
@@ -206,12 +224,6 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         if (schedule != null && schedule.courses.isNotEmpty) {
           semestersWithCourses.add(semester);
           debugPrint('学期 $semester 有课程，添加到列表');
-          // 每找到一个有课程的学期就更新UI
-          if (mounted) {
-            setState(() {
-              _availableSemesters = List.from(semestersWithCourses);
-            });
-          }
         } else {
           debugPrint('学期 $semester 无课程，跳过');
         }
@@ -220,8 +232,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
       }
     }
 
-    // 最终更新
-    if (mounted && semestersWithCourses.isNotEmpty) {
+    // 筛选完成后更新
+    if (mounted) {
       setState(() {
         _availableSemesters = semestersWithCourses;
       });
@@ -894,6 +906,30 @@ class _ScheduleScreenState extends State<ScheduleScreen>
             final totalWeeks = schedule?.totalWeeks ?? 20;
             if (_selectedWeek > totalWeeks) {
               _selectedWeek = currentWeek;
+            }
+
+            // 如果学期列表未初始化完成，显示全页面加载状态
+            if (!_semesterListInitialized) {
+              return Scaffold(
+                backgroundColor: colorScheme.surface,
+                body: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        color: colorScheme.primary,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '正在加载学期列表...',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
             }
 
             return Scaffold(
