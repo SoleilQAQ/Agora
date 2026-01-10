@@ -580,32 +580,42 @@ class JwxtService {
   /// [refresh] 是否强制刷新缓存
   /// 返回学期 ID 列表，如 ["2024-2025-1", "2023-2024-2"]
   Future<List<String>> getAvailableSemesters({bool refresh = false}) async {
-    if (!isLoggedIn) return [];
+    if (!isLoggedIn) {
+      debugPrint('获取学期列表失败: 未登录');
+      return [];
+    }
 
     try {
       final queryParams = <String, dynamic>{};
       if (refresh) queryParams['refresh'] = 'true';
 
+      debugPrint('请求学期列表: /api/academic/semesters');
       final response = await _dio.get(
         '/api/academic/semesters',
         queryParameters: queryParams.isNotEmpty ? queryParams : null,
       );
 
+      debugPrint('学期列表响应: ${response.statusCode}, ${response.data}');
+
       if (response.statusCode == 200) {
         final json = response.data as Map<String, dynamic>;
         if (json['success'] == true) {
-          final data = json['data'] as Map<String, dynamic>?;
-          if (data != null) {
-            // API 返回格式: { "semesters": [{ "id": "...", "name": "..." }, ...] }
-            final semestersList = data['semesters'] as List<dynamic>? ?? [];
-            return semestersList.map((item) {
-              if (item is Map<String, dynamic>) {
-                // 返回学期 ID
-                return item['id'] as String? ?? '';
-              }
-              return item.toString();
-            }).where((id) => id.isNotEmpty).toList();
-          }
+          // API 实际返回格式: { "semesters": [{ "label": "...", "value": "..." }, ...] }
+          // 注意：semesters 直接在根级别，不在 data 里
+          final semestersList = json['semesters'] as List<dynamic>? ?? 
+              (json['data'] as Map<String, dynamic>?)?['semesters'] as List<dynamic>? ?? [];
+          
+          final result = semestersList.map((item) {
+            if (item is Map<String, dynamic>) {
+              // 优先使用 value，其次 id
+              final value = item['value'] as String? ?? item['id'] as String? ?? '';
+              return value;
+            }
+            return item.toString();
+          }).where((id) => id.isNotEmpty && id.contains('-')).toList(); // 过滤空值和无效学期格式
+          
+          debugPrint('解析到学期列表: $result');
+          return result;
         }
       }
 

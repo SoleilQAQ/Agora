@@ -78,6 +78,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   AnimationController? _backToWeekAnimController;
   bool _isBackToWeekAnimating = false;
 
+  // 学期选择相关
+  List<String> _availableSemesters = []; // 可用学期列表（有课程的学期）
+  String? _selectedSemester; // 当前选中的学期
+  bool _isLoadingSemesters = false; // 是否正在加载学期列表
+
   // 课程表配置
   int _totalSections = 12; // 总节数（动态）
   static const double _headerHeight = 44.0;
@@ -102,6 +107,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     super.initState();
     // 加载课程表设置和时间表
     _loadScheduleSettings();
+    // 加载可用学期列表
+    _loadAvailableSemesters();
     // 初始化选中周为当前周
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final currentWeek = widget.dataManager.currentWeek;
@@ -133,6 +140,309 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
     // 检查是否设置了学期开始日期
     _checkSemesterStartDate();
+  }
+
+  /// 加载可用学期列表（筛选有课程的学期）
+  Future<void> _loadAvailableSemesters() async {
+    // 检查是否为学习通模式，学习通模式下不加载学期列表
+    final skipJwxtLogin = await AuthStorage.getSkipJwxtLogin();
+    if (skipJwxtLogin) return;
+
+    if (_isLoadingSemesters) return;
+
+    setState(() {
+      _isLoadingSemesters = true;
+    });
+
+    try {
+      // 获取所有学期列表
+      final allSemesters = await widget.dataManager.jwxtService.getAvailableSemesters();
+      debugPrint('获取到学期列表: $allSemesters');
+
+      if (allSemesters.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isLoadingSemesters = false;
+          });
+        }
+        return;
+      }
+
+      // 后台异步筛选有课程的学期
+      _filterSemestersWithCourses(allSemesters);
+
+      // 先设置当前学期
+      if (mounted) {
+        final currentSchedule = widget.dataManager.schedule;
+        setState(() {
+          // 暂时显示所有学期，后台筛选完成后会更新
+          _availableSemesters = allSemesters;
+          if (currentSchedule?.semester != null) {
+            _selectedSemester = currentSchedule!.semester;
+          } else if (allSemesters.isNotEmpty) {
+            _selectedSemester = allSemesters.first;
+          }
+          _isLoadingSemesters = false;
+        });
+        debugPrint('设置学期列表完成: $_availableSemesters, 当前选中: $_selectedSemester');
+      }
+    } catch (e) {
+      debugPrint('加载学期列表失败: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingSemesters = false;
+        });
+      }
+    }
+  }
+
+  /// 后台筛选有课程的学期
+  Future<void> _filterSemestersWithCourses(List<String> allSemesters) async {
+    final semestersWithCourses = <String>[];
+
+    for (final semester in allSemesters) {
+      try {
+        final schedule = await widget.dataManager.jwxtService.getSchedule(xnxq: semester);
+        if (schedule != null && schedule.courses.isNotEmpty) {
+          semestersWithCourses.add(semester);
+          debugPrint('学期 $semester 有课程，添加到列表');
+          // 每找到一个有课程的学期就更新UI
+          if (mounted) {
+            setState(() {
+              _availableSemesters = List.from(semestersWithCourses);
+            });
+          }
+        } else {
+          debugPrint('学期 $semester 无课程，跳过');
+        }
+      } catch (e) {
+        debugPrint('检查学期 $semester 课程失败: $e');
+      }
+    }
+
+    // 最终更新
+    if (mounted && semestersWithCourses.isNotEmpty) {
+      setState(() {
+        _availableSemesters = semestersWithCourses;
+      });
+      debugPrint('筛选完成，有课程的学期: $semestersWithCourses');
+    }
+  }
+
+  /// 切换学期
+  Future<void> _switchSemester(String semester) async {
+    if (semester == _selectedSemester) return;
+
+    setState(() {
+      _selectedSemester = semester;
+    });
+
+    // 加载选中学期的课程表
+    await widget.dataManager.loadSchedule(forceRefresh: true, xnxq: semester);
+
+    // 重置周次选择
+    if (mounted) {
+      final currentWeek = widget.dataManager.currentWeek;
+      setState(() {
+        _selectedWeek = currentWeek;
+      });
+      _scrollToWeek(currentWeek);
+    }
+  }
+
+  /// 显示学期选择器
+  void _showSemesterPicker() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final currentSchedule = widget.dataManager.schedule;
+
+    // 如果没有可用学期列表，但有当前课表，显示当前学期
+    final displaySemesters = _availableSemesters.isNotEmpty 
+        ? _availableSemesters 
+        : (currentSchedule?.semester != null ? [currentSchedule!.semester!] : <String>[]);
+
+    debugPrint('显示学期选择器: 可用学期=$_availableSemesters, 显示学期=$displaySemesters');
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 拖拽指示器
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // 标题
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '选择学期',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        // 刷新按钮
+                        IconButton(
+                          icon: _isLoadingSemesters
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: colorScheme.primary,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh_rounded),
+                          onPressed: _isLoadingSemesters
+                              ? null
+                              : () async {
+                                  await _loadAvailableSemesters();
+                                  setModalState(() {});
+                                },
+                          tooltip: '刷新学期列表',
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // 提示信息
+              if (displaySemesters.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.calendar_month_outlined,
+                        size: 48,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '暂无可用学期',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '请点击刷新按钮重新获取学期列表',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else ...[
+                const Divider(height: 1),
+                // 学期列表
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.4,
+                  ),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: displaySemesters.length,
+                    itemBuilder: (context, index) {
+                      final semester = displaySemesters[index];
+                      final isSelected = semester == (_selectedSemester ?? currentSchedule?.semester);
+                      // 判断是否为当前学期（第一个通常是当前学期）
+                      final isCurrent = index == 0;
+
+                      return ListTile(
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? colorScheme.primary
+                                : colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.calendar_month_rounded,
+                            color: isSelected
+                                ? colorScheme.onPrimary
+                                : colorScheme.onSurfaceVariant,
+                            size: 20,
+                          ),
+                        ),
+                        title: Text(
+                          semester,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            color: isSelected ? colorScheme.primary : null,
+                          ),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isCurrent)
+                              Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.primaryContainer,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  '当前',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: colorScheme.primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle_rounded,
+                                color: colorScheme.primary,
+                              ),
+                          ],
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _switchSemester(semester);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+              SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 检查学期开始日期是否已设置，未设置则提示用户
@@ -395,7 +705,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                                 colorScheme,
                                 '开始',
                                 times.$1,
-                                (newTime) {
+                                    (newTime) {
                                   setModalState(() {
                                     editingTimes[section] = (newTime, times.$2);
                                   });
@@ -420,7 +730,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                                 colorScheme,
                                 '结束',
                                 times.$2,
-                                (newTime) {
+                                    (newTime) {
                                   setModalState(() {
                                     editingTimes[section] = (times.$1, newTime);
                                   });
@@ -443,13 +753,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建时间选择按钮
   Widget _buildTimeButton(
-    BuildContext context,
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String label,
-    String time,
-    Function(String) onChanged,
-  ) {
+      BuildContext context,
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String label,
+      String time,
+      Function(String) onChanged,
+      ) {
     return InkWell(
       onTap: () => _showTimePicker(context, time, onChanged),
       borderRadius: BorderRadius.circular(8),
@@ -484,10 +794,10 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 显示时间选择器
   Future<void> _showTimePicker(
-    BuildContext context,
-    String currentTime,
-    Function(String) onChanged,
-  ) async {
+      BuildContext context,
+      String currentTime,
+      Function(String) onChanged,
+      ) async {
     // 解析当前时间
     final parts = currentTime.split(':');
     final hour = parts.length >= 1 ? int.tryParse(parts[0]) ?? 8 : 8;
@@ -542,15 +852,15 @@ class _ScheduleScreenState extends State<ScheduleScreen>
         _isPageAnimating = true;
         _schedulePageController!
             .animateToPage(
-              targetPage,
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-            )
+          targetPage,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        )
             .then((_) {
-              Future.delayed(const Duration(milliseconds: 50), () {
-                _isPageAnimating = false;
-              });
-            });
+          Future.delayed(const Duration(milliseconds: 50), () {
+            _isPageAnimating = false;
+          });
+        });
       }
     }
   }
@@ -615,11 +925,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                         : schedule == null
                         ? _buildEmptyState(theme, colorScheme)
                         : _buildSwipeableSchedule(
-                            theme,
-                            colorScheme,
-                            schedule,
-                            totalWeeks,
-                          ),
+                      theme,
+                      colorScheme,
+                      schedule,
+                      totalWeeks,
+                    ),
                   ),
                 ],
               ),
@@ -631,13 +941,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildHeader(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Schedule? schedule,
-    int currentWeek,
-    int totalWeeks,
-    bool isLoading,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      Schedule? schedule,
+      int currentWeek,
+      int totalWeeks,
+      bool isLoading,
+      ) {
     return SafeArea(
       bottom: false,
       child: Container(
@@ -692,10 +1002,54 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      schedule?.semester ?? '加载中...',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
+                    // 学期选择器（更明显的样式）
+                    GestureDetector(
+                      onTap: _showSemesterPicker,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: colorScheme.primary.withValues(alpha: 0.3),
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.calendar_month_rounded,
+                              size: 14,
+                              color: colorScheme.primary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              schedule?.semester ?? '加载中...',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 16,
+                              color: colorScheme.primary,
+                            ),
+                            if (_isLoadingSemesters) ...[
+                              const SizedBox(width: 4),
+                              SizedBox(
+                                width: 10,
+                                height: 10,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -708,13 +1062,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
             IconButton(
               icon: isLoading
                   ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: colorScheme.primary,
-                      ),
-                    )
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: colorScheme.primary,
+                ),
+              )
                   : const Icon(Icons.refresh_rounded),
               onPressed: isLoading
                   ? null
@@ -751,18 +1105,18 @@ class _ScheduleScreenState extends State<ScheduleScreen>
       },
       child: showButton
           ? Padding(
-              key: const ValueKey('back_to_week_btn'),
-              padding: const EdgeInsets.only(right: 4),
-              child: FilledButton.tonalIcon(
-                onPressed: () => _animateBackToCurrentWeek(currentWeek),
-                icon: const Icon(Icons.today_rounded, size: 18),
-                label: const Text('返回本周'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-            )
+        key: const ValueKey('back_to_week_btn'),
+        padding: const EdgeInsets.only(right: 4),
+        child: FilledButton.tonalIcon(
+          onPressed: () => _animateBackToCurrentWeek(currentWeek),
+          icon: const Icon(Icons.today_rounded, size: 18),
+          label: const Text('返回本周'),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+      )
           : const SizedBox.shrink(key: ValueKey('empty')),
     );
   }
@@ -913,11 +1267,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildWeekSelector(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    int totalWeeks,
-    int currentWeek,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      int totalWeeks,
+      int currentWeek,
+      ) {
     return Container(
       height: 44,
       margin: const EdgeInsets.only(bottom: 2),
@@ -1112,7 +1466,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                 ),
                 const SizedBox(height: 32),
                 if (skipJwxtLogin)
-                  // 学习通模式下显示添加账号和导入按钮
+                // 学习通模式下显示添加账号和导入按钮
                   Column(
                     children: [
                       FilledButton.icon(
@@ -1170,11 +1524,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建可滑动切换周数的课程表
   Widget _buildSwipeableSchedule(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Schedule schedule,
-    int totalWeeks,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      Schedule schedule,
+      int totalWeeks,
+      ) {
     // 如果 PageController 还没初始化，先显示当前周
     if (_schedulePageController == null) {
       return _buildScheduleTable(theme, colorScheme, schedule, _selectedWeek);
@@ -1210,11 +1564,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildScheduleTable(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Schedule schedule,
-    int displayWeek,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      Schedule schedule,
+      int displayWeek,
+      ) {
     final now = DateTime.now();
     final todayWeekday = now.weekday;
     final currentWeek = widget.dataManager.currentWeek;
@@ -1315,8 +1669,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                                   style: theme.textTheme.labelSmall?.copyWith(
                                     color: isToday
                                         ? colorScheme.onPrimary.withValues(
-                                            alpha: 0.85,
-                                          )
+                                      alpha: 0.85,
+                                    )
                                         : colorScheme.onSurfaceVariant,
                                     fontSize: 10,
                                   ),
@@ -1355,66 +1709,66 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             child: Center(
                               child: _showTimeColumn && times != null
                                   ? Column(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          times.$1.substring(0, 5),
-                                          style: theme.textTheme.labelSmall
-                                              ?.copyWith(
-                                                color: colorScheme
-                                                    .onSurfaceVariant,
-                                                fontSize: 8,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                        ),
-                                        Container(
-                                          margin: const EdgeInsets.symmetric(
-                                            vertical: 2,
-                                          ),
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 4,
-                                            vertical: 1,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: colorScheme
-                                                .surfaceContainerHigh,
-                                            borderRadius: BorderRadius.circular(
-                                              4,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            '$section',
-                                            style: theme.textTheme.labelSmall
-                                                ?.copyWith(
-                                                  color: colorScheme
-                                                      .onSurfaceVariant,
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 9,
-                                                ),
-                                          ),
-                                        ),
-                                        Text(
-                                          times.$2.substring(0, 5),
-                                          style: theme.textTheme.labelSmall
-                                              ?.copyWith(
-                                                color: colorScheme
-                                                    .onSurfaceVariant
-                                                    .withValues(alpha: 0.7),
-                                                fontSize: 8,
-                                              ),
-                                        ),
-                                      ],
-                                    )
-                                  : Text(
+                                mainAxisAlignment:
+                                MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    times.$1.substring(0, 5),
+                                    style: theme.textTheme.labelSmall
+                                        ?.copyWith(
+                                      color: colorScheme
+                                          .onSurfaceVariant,
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 2,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 1,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: colorScheme
+                                          .surfaceContainerHigh,
+                                      borderRadius: BorderRadius.circular(
+                                        4,
+                                      ),
+                                    ),
+                                    child: Text(
                                       '$section',
                                       style: theme.textTheme.labelSmall
                                           ?.copyWith(
-                                            color: colorScheme.onSurfaceVariant,
-                                            fontWeight: FontWeight.w500,
-                                            fontSize: 10,
-                                          ),
+                                        color: colorScheme
+                                            .onSurfaceVariant,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 9,
+                                      ),
                                     ),
+                                  ),
+                                  Text(
+                                    times.$2.substring(0, 5),
+                                    style: theme.textTheme.labelSmall
+                                        ?.copyWith(
+                                      color: colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.7),
+                                      fontSize: 8,
+                                    ),
+                                  ),
+                                ],
+                              )
+                                  : Text(
+                                '$section',
+                                style: theme.textTheme.labelSmall
+                                    ?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 10,
+                                ),
+                              ),
                             ),
                           );
                         }),
@@ -1457,13 +1811,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建某一天的课程列
   Widget _buildDayColumn(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Schedule schedule,
-    int weekday,
-    bool isToday,
-    int displayWeek,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      Schedule schedule,
+      int weekday,
+      bool isToday,
+      int displayWeek,
+      ) {
     // 获取这一天的所有本周课程
     final currentWeekCourses = schedule.courses
         .where((c) => c.weekday == weekday && c.isInWeek(displayWeek))
@@ -1495,11 +1849,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                     border: Border(
                       bottom: index < _totalSections - 1
                           ? BorderSide(
-                              color: colorScheme.outlineVariant.withValues(
-                                alpha: 0.1,
-                              ),
-                              width: 0.5,
-                            )
+                        color: colorScheme.outlineVariant.withValues(
+                          alpha: 0.1,
+                        ),
+                        width: 0.5,
+                      )
                           : BorderSide.none,
                     ),
                   ),
@@ -1511,8 +1865,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           ...nonCurrentWeekCourses.map((course) {
             // 检查是否与本周课程时间冲突
             final hasConflict = currentWeekCourses.any(
-              (c) =>
-                  (course.startSection <= c.endSection &&
+                  (c) =>
+              (course.startSection <= c.endSection &&
                   course.endSection >= c.startSection),
             );
             // 如果有冲突，不显示非本周课程
@@ -1591,7 +1945,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
     return List.generate(
       7,
-      (index) => selectedMonday.add(Duration(days: index)),
+          (index) => selectedMonday.add(Duration(days: index)),
     );
   }
 
@@ -1599,18 +1953,18 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   bool _hasCoursesOnWeekend(Schedule schedule, int week) {
     // 只检查本周是否有周末课程（周末不显示非本周课程）
     return schedule.courses.any(
-      (c) => (c.weekday == 6 || c.weekday == 7) && c.isInWeek(week),
+          (c) => (c.weekday == 6 || c.weekday == 7) && c.isInWeek(week),
     );
   }
 
   Widget _buildCourseCell(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Course course,
-    double height,
-    bool isToday, {
-    bool isNonCurrentWeek = false,
-  }) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      Course course,
+      double height,
+      bool isToday, {
+        bool isNonCurrentWeek = false,
+      }) {
     final color = CourseColors.getColor(course.name);
 
     // 本周课程使用更饱和的颜色，非本周课程使用更淡的颜色，增强对比
@@ -1640,8 +1994,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                 color: isToday && !isNonCurrentWeek
                     ? color.withValues(alpha: 0.6)
                     : borderColor.withValues(
-                        alpha: isNonCurrentWeek ? 0.3 : 0.2,
-                      ),
+                  alpha: isNonCurrentWeek ? 0.3 : 0.2,
+                ),
                 width: isToday && !isNonCurrentWeek ? 1.0 : 0.5,
               ),
               borderRadius: BorderRadius.circular(6),
@@ -1870,7 +2224,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                       icon: Icons.calendar_month_rounded,
                       label: '上课周次',
                       value:
-                          course.weekRange ??
+                      course.weekRange ??
                           '${course.weeks.first}-${course.weeks.last}周',
                       color: color,
                       colorScheme: colorScheme,
@@ -1978,7 +2332,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   Future<void> _importSchedule() async {
     try {
       final schedule =
-          await ScheduleImportExportService.showImportOptionsDialog(context);
+      await ScheduleImportExportService.showImportOptionsDialog(context);
 
       if (schedule != null) {
         // 保存导入的课表
@@ -2160,7 +2514,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.morningSections,
                             1,
                             6,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   morningSections: value,
@@ -2175,7 +2529,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.afternoonSections,
                             1,
                             6,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   afternoonSections: value,
@@ -2190,7 +2544,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.eveningSections,
                             0,
                             6,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   eveningSections: value,
@@ -2214,7 +2568,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             '显示非本周课程',
                             '以降低对比度方式显示其他周的课程',
                             editingSettings.showNonCurrentWeekCourses,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   showNonCurrentWeekCourses: value,
@@ -2242,8 +2596,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             trailing: const Icon(Icons.chevron_right),
                             onTap: currentSchedule != null
                                 ? () async {
-                                    await _exportSchedule(currentSchedule);
-                                  }
+                              await _exportSchedule(currentSchedule);
+                            }
                                 : null,
                           ),
                           const Divider(height: 1, indent: 56, endIndent: 16),
@@ -2282,7 +2636,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                                   theme,
                                   colorScheme,
                                   editingSettings,
-                                  (newSettings) {
+                                      (newSettings) {
                                     // 回调更新父弹窗的设置
                                     setModalState(() {
                                       editingSettings = newSettings;
@@ -2328,15 +2682,15 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 显示课程时间设置（二级弹窗）
   void _showCourseTimeSettings(
-    BuildContext parentContext,
-    ThemeData theme,
-    ColorScheme colorScheme,
-    ScheduleSettings initialSettings,
-    void Function(ScheduleSettings) onSettingsChanged,
-  ) {
+      BuildContext parentContext,
+      ThemeData theme,
+      ColorScheme colorScheme,
+      ScheduleSettings initialSettings,
+      void Function(ScheduleSettings) onSettingsChanged,
+      ) {
     // 在子弹窗中维护自己的设置副本
     var editingSettings = initialSettings;
-    
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2414,7 +2768,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             colorScheme,
                             '上午开始',
                             editingSettings.morningStartTime,
-                            (time) {
+                                (time) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   morningStartTime: time,
@@ -2427,7 +2781,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             colorScheme,
                             '下午开始',
                             editingSettings.afternoonStartTime,
-                            (time) {
+                                (time) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   afternoonStartTime: time,
@@ -2440,7 +2794,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             colorScheme,
                             '晚上开始',
                             editingSettings.eveningStartTime,
-                            (time) {
+                                (time) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   eveningStartTime: time,
@@ -2465,7 +2819,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.classDuration,
                             30,
                             60,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   classDuration: value,
@@ -2481,7 +2835,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.shortBreak,
                             0,
                             20,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   shortBreak: value,
@@ -2497,7 +2851,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.longBreak,
                             10,
                             40,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   longBreak: value,
@@ -2513,7 +2867,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             editingSettings.longBreakInterval,
                             1,
                             4,
-                            (value) {
+                                (value) {
                               setModalState(() {
                                 editingSettings = editingSettings.copyWith(
                                   longBreakInterval: value,
@@ -2567,12 +2921,12 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建设置分区
   Widget _buildSettingsSection(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String title,
-    IconData icon,
-    List<Widget> children,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String title,
+      IconData icon,
+      List<Widget> children,
+      ) {
     return Card(
       elevation: 0,
       color: colorScheme.surfaceContainerHigh,
@@ -2604,12 +2958,12 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建时间设置项
   Widget _buildTimeSettingItem(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String label,
-    String time,
-    Function(String) onChanged,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String label,
+      String time,
+      Function(String) onChanged,
+      ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -2673,15 +3027,15 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建数字设置项
   Widget _buildNumberSettingItem(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String label,
-    int value,
-    int min,
-    int max,
-    Function(int) onChanged, {
-    String? suffix,
-  }) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String label,
+      int value,
+      int min,
+      int max,
+      Function(int) onChanged, {
+        String? suffix,
+      }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -2748,13 +3102,13 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建开关设置项
   Widget _buildSwitchSettingItem(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String label,
-    String subtitle,
-    bool value,
-    Function(bool) onChanged,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String label,
+      String subtitle,
+      bool value,
+      Function(bool) onChanged,
+      ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -2787,11 +3141,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建学期开始日期设置项
   Widget _buildSemesterStartDateItem(
-    BuildContext context,
-    ThemeData theme,
-    ColorScheme colorScheme,
-    StateSetter setModalState,
-  ) {
+      BuildContext context,
+      ThemeData theme,
+      ColorScheme colorScheme,
+      StateSetter setModalState,
+      ) {
     return FutureBuilder<DateTime?>(
       future: AuthStorage.getSemesterStartDate(),
       builder: (context, snapshot) {
@@ -2874,10 +3228,10 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 显示学期开始日期选择器
   Future<void> _showSemesterStartDatePicker(
-    BuildContext context,
-    DateTime? currentDate,
-    StateSetter setModalState,
-  ) async {
+      BuildContext context,
+      DateTime? currentDate,
+      StateSetter setModalState,
+      ) async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
@@ -2910,10 +3264,10 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 构建时间表预览
   Widget _buildTimetablePreview(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    ScheduleSettings settings,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      ScheduleSettings settings,
+      ) {
     final previewTimetable = AuthStorage.generateTimetable(settings);
     final morningEnd = settings.morningSections;
     final afternoonEnd = morningEnd + settings.afternoonSections;
@@ -2995,11 +3349,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildPeriodLabel(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    String label,
-    IconData icon,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      String label,
+      IconData icon,
+      ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -3019,11 +3373,11 @@ class _ScheduleScreenState extends State<ScheduleScreen>
   }
 
   Widget _buildPreviewRow(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    int section,
-    (String, String)? times,
-  ) {
+      ThemeData theme,
+      ColorScheme colorScheme,
+      int section,
+      (String, String)? times,
+      ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
