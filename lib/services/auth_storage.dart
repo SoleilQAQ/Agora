@@ -34,6 +34,8 @@ class AuthStorage {
   static const String _keyWeatherCacheTime = 'cache_weather_time';
   static const String _keyScheduleCache = 'cache_schedule';
   static const String _keyScheduleCacheTime = 'cache_schedule_time';
+  static const String _keySemestersCache = 'cache_semesters'; // 学期列表缓存
+  static const String _keySemestersCacheTime = 'cache_semesters_time'; // 学期列表缓存时间
   static const String _keyGradesCache = 'cache_grades';
   static const String _keyGradesCacheTime = 'cache_grades_time';
   static const String _keyUserCache = 'cache_user';
@@ -528,10 +530,61 @@ class AuthStorage {
     await prefs.remove(_keyScheduleCacheTime);
   }
 
+  // ==================== 学期列表缓存 ====================
+
+  /// 保存学期列表缓存
+  static Future<void> saveSemestersCache(List<String> semesters) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keySemestersCache, jsonEncode(semesters));
+    await prefs.setString(
+      _keySemestersCacheTime,
+      DateTime.now().toIso8601String(),
+    );
+  }
+
+  /// 获取学期列表缓存
+  /// 返回 (学期列表, 是否有效)
+  static Future<(List<String>?, bool)> getSemestersCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString(_keySemestersCache);
+    final timeStr = prefs.getString(_keySemestersCacheTime);
+
+    if (data == null || timeStr == null) {
+      return (null, false);
+    }
+
+    final cachedAt = DateTime.tryParse(timeStr);
+    if (cachedAt == null) {
+      try {
+        final semesters = (jsonDecode(data) as List<dynamic>).cast<String>();
+        return (semesters, false);
+      } catch (e) {
+        return (null, false);
+      }
+    }
+
+    // 学期列表缓存有效期为30天（一个月）
+    final isValid = DateTime.now().difference(cachedAt).inDays < 30;
+    try {
+      final semesters = (jsonDecode(data) as List<dynamic>).cast<String>();
+      return (semesters, isValid);
+    } catch (e) {
+      return (null, false);
+    }
+  }
+
+  /// 清除学期列表缓存
+  static Future<void> clearSemestersCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keySemestersCache);
+    await prefs.remove(_keySemestersCacheTime);
+  }
+
   /// 清除所有数据缓存
   static Future<void> clearAllDataCache() async {
     await clearWeatherCache();
     await clearScheduleCache();
+    await clearSemestersCache();
     await clearGradesCache();
     await clearUserCache();
     await clearWorksCache();

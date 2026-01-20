@@ -164,12 +164,18 @@ class DataManager extends ChangeNotifier {
       }
     }
 
+    // 强制刷新时清除内存缓存（在设置 loading 状态之前）
+    if (forceRefresh) {
+      debugPrint('强制刷新用户信息，清除内存缓存');
+      _user = null;
+    }
+
     _userState = LoadingState.loading;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      final user = await jwxtService.getUserInfo();
+      final user = await jwxtService.getUserInfo(refresh: forceRefresh);
       if (user != null) {
         _user = user;
         _userState = LoadingState.loaded;
@@ -195,7 +201,7 @@ class DataManager extends ChangeNotifier {
   /// 后台刷新用户信息（不影响UI状态）
   Future<void> _refreshUserInBackground() async {
     try {
-      final user = await jwxtService.getUserInfo();
+      final user = await jwxtService.getUserInfo(refresh: true);
       if (user != null) {
         _user = user;
         await _saveUserToCache(user);
@@ -271,12 +277,18 @@ class DataManager extends ChangeNotifier {
       }
     }
 
+    // 强制刷新时清除内存缓存（在设置 loading 状态之前）
+    if (forceRefresh) {
+      debugPrint('强制刷新课程表，清除内存缓存');
+      _schedule = null;
+    }
+
     _scheduleState = LoadingState.loading;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      final schedule = await jwxtService.getSchedule(xnxq: xnxq);
+      final schedule = await jwxtService.getSchedule(xnxq: xnxq, refresh: forceRefresh);
       if (schedule != null) {
         _schedule = schedule;
         _scheduleState = LoadingState.loaded;
@@ -369,32 +381,54 @@ class DataManager extends ChangeNotifier {
 
   /// 加载成绩
   Future<void> loadGrades({bool forceRefresh = false, String? kksj}) async {
-    if (_gradesState == LoadingState.loading) return;
+    debugPrint('=== loadGrades 调用 ===');
+    debugPrint('forceRefresh: $forceRefresh, kksj: $kksj');
+    debugPrint('当前状态: $_gradesState');
+    
+    if (_gradesState == LoadingState.loading) {
+      debugPrint('已经在加载中，跳过');
+      return;
+    }
 
     // 非强制刷新且没有指定学期时，先尝试从缓存加载
     if (!forceRefresh && kksj == null) {
-      if (_grades != null) return; // 内存中已有数据
+      if (_grades != null) {
+        debugPrint('内存中已有数据，跳过');
+        return; // 内存中已有数据
+      }
 
       // 尝试从持久化缓存加载
       final cacheLoaded = await _loadGradesFromCache();
       if (cacheLoaded && _grades != null) {
         _gradesState = LoadingState.loaded;
         notifyListeners();
+        debugPrint('从缓存加载成功');
         return;
       }
     }
 
+    debugPrint('开始加载成绩...');
+    
+    // 强制刷新时清除内存缓存（在设置 loading 状态之前，避免额外的 UI 更新）
+    if (forceRefresh) {
+      debugPrint('强制刷新，清除内存缓存');
+      _grades = null;
+    }
+    
     _gradesState = LoadingState.loading;
     _errorMessage = null;
-    notifyListeners();
+    notifyListeners(); // 只通知一次，包含清除缓存和设置 loading 状态
 
     try {
       // 获取可用学期列表
-      if (_semesters.isEmpty) {
-        _semesters = await jwxtService.getAvailableSemesters();
+      if (_semesters.isEmpty || forceRefresh) {
+        _semesters = await jwxtService.getAvailableSemesters(refresh: forceRefresh);
+        debugPrint('获取到学期列表: $_semesters');
       }
 
-      final grades = await jwxtService.getGrades(kksj: kksj);
+      final grades = await jwxtService.getGrades(kksj: kksj, refresh: forceRefresh);
+      debugPrint('获取成绩结果: ${grades?.length ?? 0} 个学期');
+      
       if (grades != null) {
         _grades = grades;
         _gradesState = LoadingState.loaded;
@@ -403,6 +437,7 @@ class DataManager extends ChangeNotifier {
         if (kksj == null) {
           await _saveGradesToCache(grades);
         }
+        debugPrint('成绩加载成功');
       } else {
         // 网络获取失败时，尝试使用过期缓存
         final (cacheData, _) = await AuthStorage.getGradesCache();
@@ -416,9 +451,11 @@ class DataManager extends ChangeNotifier {
         } else {
           _gradesState = LoadingState.error;
           _errorMessage = '获取成绩失败';
+          debugPrint('成绩加载失败：无数据');
         }
       }
     } catch (e) {
+      debugPrint('成绩加载异常: $e');
       // 网络异常时尝试使用过期缓存
       final (cacheData, _) = await AuthStorage.getGradesCache();
       if (cacheData != null) {
@@ -436,6 +473,7 @@ class DataManager extends ChangeNotifier {
     }
 
     notifyListeners();
+    debugPrint('=== loadGrades 完成 ===');
   }
 
   /// 刷新所有数据

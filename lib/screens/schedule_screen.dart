@@ -114,8 +114,18 @@ class _ScheduleScreenState extends State<ScheduleScreen>
 
   /// 等待学期列表加载完成后初始化 UI
   Future<void> _initializeAfterSemesterLoading() async {
-    // 加载可用学期列表（会等待筛选完成）
-    await _loadAvailableSemesters();
+    // 先从当前课表获取学期，立即设置
+    final currentSchedule = widget.dataManager.schedule;
+    debugPrint('初始化学期: currentSchedule=${currentSchedule?.semester}');
+    if (mounted && currentSchedule?.semester != null) {
+      setState(() {
+        _selectedSemester = currentSchedule!.semester;
+      });
+      debugPrint('设置初始学期: $_selectedSemester');
+    }
+    
+    // 加载可用学期列表（静默加载，不显示加载状态）
+    await _loadAvailableSemesters(silent: true);
     
     // 学期列表加载完成后，初始化选中周
     if (mounted) {
@@ -152,13 +162,23 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     _checkSemesterStartDate();
   }
 
-  /// 加载可用学期列表（等待筛选完成后返回）
-  Future<void> _loadAvailableSemesters() async {
+  /// 加载可用学期列表（优化：使用缓存，只检查最近几个学期）
+  /// [forceRefresh] 是否强制刷新（忽略缓存）
+  /// [silent] 是否静默加载（不显示加载状态）
+  Future<void> _loadAvailableSemesters({
+    bool forceRefresh = false,
+    bool silent = false,
+  }) async {
     // 检查是否为学习通模式，学习通模式下不加载学期列表
     final skipJwxtLogin = await AuthStorage.getSkipJwxtLogin();
     if (skipJwxtLogin) {
       if (mounted) {
+        // 学习通模式下，使用当前课表的学期
+        final currentSchedule = widget.dataManager.schedule;
         setState(() {
+          if (currentSchedule?.semester != null) {
+            _selectedSemester = currentSchedule!.semester;
+          }
           _semesterListInitialized = true;
         });
       }
@@ -168,41 +188,54 @@ class _ScheduleScreenState extends State<ScheduleScreen>
     if (_isLoadingSemesters) return;
 
     try {
-      setState(() {
-        _isLoadingSemesters = true;
-      });
-
-      // 获取所有学期列表
-      final allSemesters = await widget.dataManager.jwxtService.getAvailableSemesters();
-      debugPrint('获取到学期列表: $allSemesters');
-
-      if (allSemesters.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _isLoadingSemesters = false;
-            _semesterListInitialized = true;
-          });
-        }
-        return;
-      }
-
-      // 等待筛选完成
-      await _filterSemestersWithCourses(allSemesters);
-
-      // 筛选完成后设置当前学期
-      if (mounted) {
-        final currentSchedule = widget.dataManager.schedule;
+      // 只有非静默模式才显示加载状态
+      if (!silent && mounted) {
         setState(() {
-          if (currentSchedule?.semester != null) {
-            _selectedSemester = currentSchedule!.semester;
-          } else if (_availableSemesters.isNotEmpty) {
-            _selectedSemester = _availableSemesters.first;
-          }
-          _isLoadingSemesters = false;
-          _semesterListInitialized = true;
+          _isLoadingSemesters = true;
         });
-        debugPrint('学期列表加载完成: $_availableSemesters, 当前选中: $_selectedSemester');
       }
+
+      // 非强制刷新时，先尝试从缓存加载
+      if (!forceRefresh) {
+        final (cachedSemesters, isValid) = await AuthStorage.getSemestersCache();
+        if (cachedSemesters != null && cachedSemesters.isNotEmpty) {
+          debugPrint('从缓存加载学期列表: $cachedSemesters (有效: $isValid)');
+          
+          if (mounted) {
+            final currentSchedule = widget.dataManager.schedule;
+            String? newSelectedSemester;
+            
+            if (currentSchedule?.semester != null && 
+                cachedSemesters.contains(currentSchedule!.semester)) {
+              newSelectedSemester = currentSchedule.semester;
+            } else if (cachedSemesters.isNotEmpty) {
+              newSelectedSemester = cachedSemesters.first;
+            }
+            
+            setState(() {
+              _availableSemesters = cachedSemesters;
+              _selectedSemester = newSelectedSemester;
+              _isLoadingSemesters = false;
+              _semesterListInitialized = true;
+            });
+            
+            debugPrint('使用缓存的学期列表: $_availableSemesters, 当前选中: $_selectedSemester');
+            
+            // 如果缓存有效，直接返回；如果缓存过期，后台更新
+            if (isValid) {
+              return;
+            } else {
+              debugPrint('缓存已过期，后台静默更新学期列表');
+              // 后台更新，不阻塞 UI
+              _updateSemestersInBackground();
+              return;
+            }
+          }
+        }
+      }
+
+      // 缓存不存在或强制刷新，从网络加载
+      await _loadSemestersFromNetwork();
     } catch (e) {
       debugPrint('加载学期列表失败: $e');
       if (mounted) {
@@ -211,6 +244,74 @@ class _ScheduleScreenState extends State<ScheduleScreen>
           _semesterListInitialized = true;
         });
       }
+    }
+  }
+
+  /// 从网络加载学期列表
+  Future<void> _loadSemestersFromNetwork() async {
+    // 获取所有学期列表
+    final allSemesters = await widget.dataManager.jwxtService.getAvailableSemesters();
+    debugPrint('从网络获取到学期列表: $allSemesters');
+
+    if (allSemesters.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _isLoadingSemesters = false;
+          _semesterListInitialized = true;
+        });
+      }
+      return;
+    }
+
+    // 优化：只检查最近8个学期（通常4年），减少等待时间
+    final recentSemesters = allSemesters.take(8).toList();
+    debugPrint('只检查最近的学期: $recentSemesters');
+
+    // 等待筛选完成
+    await _filterSemestersWithCourses(recentSemesters);
+
+    // 保存到缓存
+    if (_availableSemesters.isNotEmpty) {
+      await AuthStorage.saveSemestersCache(_availableSemesters);
+      debugPrint('学期列表已保存到缓存');
+    }
+
+    // 筛选完成后设置当前学期
+    if (mounted) {
+      final currentSchedule = widget.dataManager.schedule;
+      String? newSelectedSemester;
+      
+      // 优先使用当前课表的学期，如果不在列表中则使用第一个有课程的学期
+      if (currentSchedule?.semester != null && 
+          _availableSemesters.contains(currentSchedule!.semester)) {
+        newSelectedSemester = currentSchedule.semester;
+      } else if (_availableSemesters.isNotEmpty) {
+        newSelectedSemester = _availableSemesters.first;
+      }
+      
+      setState(() {
+        _selectedSemester = newSelectedSemester;
+        _isLoadingSemesters = false;
+        _semesterListInitialized = true;
+      });
+      
+      debugPrint('学期列表加载完成: $_availableSemesters, 当前选中: $_selectedSemester');
+      
+      // 如果选中的学期与当前课表不一致，需要加载正确的课程表
+      if (newSelectedSemester != null && 
+          newSelectedSemester != currentSchedule?.semester) {
+        debugPrint('学期不一致，加载正确的课程表: $newSelectedSemester');
+        await widget.dataManager.loadSchedule(forceRefresh: true, xnxq: newSelectedSemester);
+      }
+    }
+  }
+
+  /// 后台更新学期列表（不阻塞 UI）
+  Future<void> _updateSemestersInBackground() async {
+    try {
+      await _loadSemestersFromNetwork();
+    } catch (e) {
+      debugPrint('后台更新学期列表失败: $e');
     }
   }
 
@@ -327,7 +428,8 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                           onPressed: _isLoadingSemesters
                               ? null
                               : () async {
-                                  await _loadAvailableSemesters();
+                                  // 强制刷新学期列表，显示加载状态
+                                  await _loadAvailableSemesters(forceRefresh: true);
                                   setModalState(() {});
                                 },
                           tooltip: '刷新学期列表',
@@ -1061,7 +1163,7 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              schedule?.semester ?? '加载中...',
+                              _selectedSemester ?? schedule?.semester ?? '加载中...',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: colorScheme.primary,
                                 fontWeight: FontWeight.w600,
@@ -1108,7 +1210,10 @@ class _ScheduleScreenState extends State<ScheduleScreen>
                   : const Icon(Icons.refresh_rounded),
               onPressed: isLoading
                   ? null
-                  : () => widget.dataManager.loadSchedule(forceRefresh: true),
+                  : () => widget.dataManager.loadSchedule(
+                      forceRefresh: true, 
+                      xnxq: _selectedSemester, // 刷新当前选中的学期
+                    ),
               tooltip: '刷新',
             ),
             // 设置按钮

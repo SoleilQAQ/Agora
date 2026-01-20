@@ -102,6 +102,40 @@ class _GradesScreenState extends State<GradesScreen>
 
                       // 数据内容
                       if (grades != null && grades.isNotEmpty) ...[
+                        // 刷新时的加载提示条
+                        if (isLoading)
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.primaryContainer.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: colorScheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  '正在刷新成绩数据...',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: colorScheme.onPrimaryContainer,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        
                         // 总成绩汇总卡片
                         _buildOverallStatisticsCard(theme, colorScheme, grades),
                         const SizedBox(height: 16),
@@ -148,17 +182,6 @@ class _GradesScreenState extends State<GradesScreen>
                                 ),
                               ),
                             ),
-                            if (isLoading) ...[
-                              const SizedBox(width: 12),
-                              SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: colorScheme.primary,
-                                ),
-                              ),
-                            ],
                           ],
                         ),
                         const SizedBox(height: 12),
@@ -190,68 +213,92 @@ class _GradesScreenState extends State<GradesScreen>
   }
 
   Widget _buildLoadingState(ColorScheme colorScheme) {
-    return Card(
-      elevation: 0,
-      color: colorScheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(48),
-        child: Column(
-          children: [
-            SizedBox(
-              width: 48,
-              height: 48,
-              child: CircularProgressIndicator(
-                strokeWidth: 3,
-                color: colorScheme.primary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '正在加载成绩...',
-              style: TextStyle(color: colorScheme.onSurfaceVariant),
-            ),
-          ],
+    return Column(
+      children: [
+        const SizedBox(height: 40),
+        // 加载动画
+        SizedBox(
+          width: 56,
+          height: 56,
+          child: CircularProgressIndicator(
+            strokeWidth: 4,
+            color: colorScheme.primary,
+          ),
         ),
-      ),
+        const SizedBox(height: 24),
+        // 加载文本
+        Text(
+          '正在加载成绩数据',
+          style: TextStyle(
+            color: colorScheme.onSurface,
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '请稍候...',
+          style: TextStyle(
+            color: colorScheme.onSurfaceVariant,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 40),
+      ],
     );
   }
 
   Widget _buildErrorState(ThemeData theme, ColorScheme colorScheme) {
-    return Card(
-      elevation: 0,
-      color: colorScheme.errorContainer.withValues(alpha: 0.5),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          children: [
-            Icon(Icons.error_outline, size: 64, color: colorScheme.error),
-            const SizedBox(height: 16),
-            Text(
-              '加载失败',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: colorScheme.error,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.dataManager.errorMessage ?? '请检查网络连接',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onErrorContainer,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () =>
-                  widget.dataManager.loadGrades(forceRefresh: true),
-              icon: const Icon(Icons.refresh),
-              label: const Text('重试'),
-            ),
-          ],
+    return Column(
+      children: [
+        const SizedBox(height: 40),
+        // 错误图标
+        Container(
+          width: 80,
+          height: 80,
+          decoration: BoxDecoration(
+            color: colorScheme.errorContainer.withValues(alpha: 0.3),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.error_outline_rounded,
+            size: 40,
+            color: colorScheme.error,
+          ),
         ),
-      ),
+        const SizedBox(height: 24),
+        // 错误标题
+        Text(
+          '加载失败',
+          style: theme.textTheme.titleLarge?.copyWith(
+            color: colorScheme.onSurface,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 12),
+        // 错误信息
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Text(
+            widget.dataManager.errorMessage ?? '请检查网络连接后重试',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        const SizedBox(height: 32),
+        // 重试按钮
+        FilledButton.tonalIcon(
+          onPressed: () => widget.dataManager.loadGrades(forceRefresh: true),
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('重新加载'),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          ),
+        ),
+        const SizedBox(height: 40),
+      ],
     );
   }
 
